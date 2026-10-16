@@ -506,6 +506,18 @@
     /* ══════════════════════════════════════════════════════════ 设置页 */
 
     function pageSettings() {
+        // 滑块轨道是自己画的（原生轨道在深色页上是浅灰），填充比例写进 --fill
+        $$('.range').forEach((el) => {
+            const paint = () => {
+                const min = Number(el.min || 0);
+                const max = Number(el.max || 100);
+                const pct = max > min ? ((Number(el.value) - min) / (max - min)) * 100 : 0;
+                el.style.setProperty('--fill', pct.toFixed(2) + '%');
+            };
+            el.addEventListener('input', paint);
+            paint();
+        });
+
         const retention = $('[data-retention-range]');
         if (retention) {
             const out = $('[data-retention-out]');

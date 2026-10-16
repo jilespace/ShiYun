@@ -358,7 +358,7 @@
 
     /* ══════════════════════════════════════════════════════════ 目录树选择器 */
 
-    async function pickFolder(title, excludeId) {
+    async function pickFolder(title, excludeId, hint) {
         const data = await api('files.tree', { exclude: excludeId || 0 }, { method: 'GET' });
 
         const children = new Map();
@@ -371,7 +371,8 @@
         const rows = [];
         const walk = (parentKey, depth) => {
             (children.get(parentKey) || []).forEach((n) => {
-                rows.push('<button class="tree__item" type="button" data-pick="' + n.id + '"'
+                rows.push('<button class="tree__item' + (Number(n.id) === Number(data.root) ? ' is-on' : '')
+                    + '" type="button" data-pick="' + n.id + '"'
                     + ' style="padding-left:' + (9 + depth * 16) + 'px">'
                     + icon(n.private ? 'lock-keyhole' : 'folder', 'tree__ico')
                     + '<span>' + escapeHtml(n.name) + '</span></button>');
@@ -385,7 +386,7 @@
 
             openModal(title,
                 '<div class="tree" data-tree>' + rows.join('') + '</div>'
-                + '<p class="mhint" style="margin-top:12px">未选择时默认放到「我的文件」。</p>',
+                + (hint ? '<p class="mhint" style="margin-top:12px">' + escapeHtml(hint) + '</p>' : ''),
                 '<button class="mbtn" type="button" data-x="no">取消</button>'
                 + '<button class="mbtn mbtn--primary" type="button" data-x="yes">确定</button>',
                 () => resolve(null)
@@ -462,7 +463,8 @@
 
     async function doMove(ids) {
         if (!ids.length) return;
-        const target = await pickFolder('移动到…', ids.length === 1 ? ids[0] : 0);
+        const target = await pickFolder('移动到…', ids.length === 1 ? ids[0] : 0,
+            '移动后原位置不再保留；想留副本请用「复制到…」。');
         if (target === null) return;
         try {
             const data = await api('files.move', { ids: ids, target: target });
@@ -475,7 +477,8 @@
 
     async function doCopy(ids) {
         if (!ids.length) return;
-        const target = await pickFolder('复制到…', 0);
+        const target = await pickFolder('复制到…', 0,
+            '原文件留在原位置，这里只多出一份副本。');
         if (target === null) return;
         try {
             const data = await api('files.copy', { ids: ids, target: target });

@@ -75,8 +75,8 @@ $quotaGb = $quota['total'] > 0 ? round($quota['total'] / 1024 ** 3, 1) : 0;
 
                         <div style="margin-top:20px;padding-top:18px;border-top:1px solid var(--line)">
                             <span class="tile__label">WebDAV 挂载地址</span>
-                            <div class="tbl__name" style="margin-top:8px">
-                                <code style="flex:1;min-width:0;word-break:break-all;color:var(--dim)"><?= e($webdavUrl) ?></code>
+                            <div class="urlbox">
+                                <code><?= e($webdavUrl) ?></code>
                                 <button class="minibtn" type="button" data-copy-webdav="<?= e($webdavUrl) ?>" aria-label="复制"><?= lucide('copy') ?></button>
                             </div>
                         </div>

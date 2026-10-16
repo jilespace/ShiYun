@@ -53,14 +53,16 @@ $barW = 720 / $barCount;
 
 $distTotal = max(1, array_sum(array_map(static fn (array $d): int => $d['bytes'], $dist)));
 
+/* 引用 files.css 里的 --kind-* —— 与文件网格卡片共用同一套类型配色，
+   不要再在这里另起一份，否则同一种类型会在两个页面显示成不同颜色。 */
 $distColors = [
-    'image'    => '#8a88ff',
-    'video'    => '#3ad0d0',
-    'audio'    => '#4ad07a',
-    'document' => '#ffa23a',
-    'archive'  => '#ff5a5a',
-    'code'     => '#e8d44d',
-    'other'    => 'rgba(244,242,236,.3)',
+    'image'    => 'var(--kind-image)',
+    'video'    => 'var(--kind-video)',
+    'audio'    => 'var(--kind-audio)',
+    'document' => 'var(--kind-document)',
+    'archive'  => 'var(--kind-archive)',
+    'code'     => 'var(--kind-code)',
+    'other'    => 'var(--kind-other)',
 ];
 ?>
 <div class="app" data-app data-section="stats" data-page="stats">

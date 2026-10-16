@@ -89,6 +89,13 @@ function activity_label(string $action): string
         'trash.empty'    => '清空回收站',
         'source.add'     => '添加存储源',
         'source.remove'  => '移除存储源',
+        'source.push'    => '推送副本',
+        'source.retry'   => '重试推送',
+        'rule.create'    => '新建规则',
+        'rule.apply'     => '应用规则',
+        'rule.delete'    => '删除规则',
+        'search.reindex' => '重建内容索引',
+        'quota.update'   => '调整配额',
         'token.create'   => '创建 API 令牌',
         'token.revoke'   => '吊销 API 令牌',
     ];

@@ -90,10 +90,13 @@ $scopes = [
 
                 <span class="filters__sep" aria-hidden="true"></span>
 
-                <input class="minput" name="from" type="date" value="<?= e((string) $filters['from']) ?>"
-                       data-auto-submit title="起始修改时间" style="width:150px">
-                <input class="minput" name="to" type="date" value="<?= e((string) $filters['to']) ?>"
-                       data-auto-submit title="截止修改时间" style="width:150px">
+                <div class="filters__range">
+                    <input class="minput" name="from" type="date" value="<?= e((string) $filters['from']) ?>"
+                           data-auto-submit title="起始修改时间" aria-label="起始修改时间">
+                    <span class="filters__range-sep" aria-hidden="true">–</span>
+                    <input class="minput" name="to" type="date" value="<?= e((string) $filters['to']) ?>"
+                           data-auto-submit title="截止修改时间" aria-label="截止修改时间">
+                </div>
 
                 <label class="mfield" style="gap:0">
                     <select class="select" name="tag" data-auto-submit>
@@ -143,8 +146,6 @@ $scopes = [
                                     <span><?= e((string) $hit['pathText']) ?></span>
                                     <span>·</span>
                                     <span><?= $isFolder ? (int) $hit['childCount'] . ' 项' : e((string) $hit['sizeText']) ?></span>
-                                    <span>·</span>
-                                    <span><?= e((string) $hit['updatedText']) ?></span>
                                     <?php foreach (array_slice($hit['tags'], 0, 3) as $tag): ?>
                                         <span class="chip" style="--chip:<?= e((string) $tag['color']) ?>"><?= e((string) $tag['name']) ?></span>
                                     <?php endforeach; ?>

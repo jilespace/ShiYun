@@ -100,8 +100,8 @@ $permLabel = static fn (string $p): string => match ($p) {
                                             </span>
                                         </td>
                                         <td>
-                                            <div class="tbl__name">
-                                                <code style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)"><?= e((string) $s['url']) ?></code>
+                                            <div class="tbl__name tbl__link">
+                                                <code class="tbl__url" title="<?= e((string) $s['url']) ?>"><?= e((string) $s['url']) ?></code>
                                                 <button class="minibtn" type="button" data-share-copy="<?= e((string) $s['url']) ?>" aria-label="复制链接"><?= lucide('copy') ?></button>
                                                 <button class="minibtn" type="button" data-share-qr="<?= (int) $s['id'] ?>" aria-label="二维码"><?= lucide('qr-code') ?></button>
                                             </div>

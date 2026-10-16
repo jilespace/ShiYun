@@ -23,10 +23,39 @@ function auth_login(): void
     auth_render('login');
 }
 
+/**
+ * 注册开放状态：
+ *   open      —— config.allow_registration 显式开启
+ *   bootstrap —— 全新部署且一个账号都没有。此时放行，否则关掉注册后就再也
+ *                建不出第一个账号；建出第一个账号后自动回到 closed。
+ *   closed    —— 默认，注册接口与页面入口一并关闭
+ */
+function registration_state(): string
+{
+    if ((bool) config('allow_registration', false)) {
+        return 'open';
+    }
+    return (int) q_val('SELECT COUNT(*) FROM users') === 0 ? 'bootstrap' : 'closed';
+}
+
+function registration_open(): bool
+{
+    return registration_state() !== 'closed';
+}
+
 function auth_register(): void
 {
     if (Auth::check()) {
         redirect(url('files.list'));
+    }
+
+    // 关闭时不只是藏起入口：直接提交到这个地址同样会被挡下。
+    if (!registration_open()) {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+            http_response_code(403);
+        }
+        auth_render('register');
+        return;
     }
 
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
@@ -54,7 +83,7 @@ function auth_render(string $tab, array $state = []): void
 {
     render('auth', [
         'title'     => match ($tab) {
-            'register' => '创建账号 · 拾云',
+            'register' => registration_open() ? '创建账号 · 拾云' : '注册已关闭 · 拾云',
             'forgot'   => '找回密码 · 拾云',
             'reset'    => '重设密码 · 拾云',
             default    => '登录 · 拾云',
@@ -65,6 +94,8 @@ function auth_render(string $tab, array $state = []): void
         'notice'    => $state['notice'] ?? null,
         'resetLink' => $state['resetLink'] ?? null,
         'resetToken' => $state['resetToken'] ?? null,
+        'allowRegistration' => registration_open(),
+        'firstRun'          => registration_state() === 'bootstrap',
         'bodyClass' => 'is-auth',
     ]);
 }

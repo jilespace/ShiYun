@@ -18,6 +18,11 @@ $rootId = user_root_id((int) $user['id']);
 $cronUrl = (($_SERVER['HTTPS'] ?? '') === 'on' ? 'https' : 'http')
     . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost')
     . '/index.php?r=tasks.cron&key=' . rawurlencode((string) config('cron_key', ''));
+
+// 显示时在 key= 之后允许换行：否则自动断行会从密钥中间切开，
+// 密钥被拆成两半后很难核对。整段密钥落到下一行才读得清。
+$cronSplit = explode('&key=', $cronUrl, 2);
+$cronHtml = e($cronSplit[0]) . '&amp;key=<wbr>' . e($cronSplit[1] ?? '');
 ?>
 <div class="app" data-app data-section="tasks" data-page="tasks">
     <?php view('partials/spine', ['section' => 'tasks', 'user' => $user, 'quota' => $quota]) ?>
@@ -104,8 +109,8 @@ $cronUrl = (($_SERVER['HTTPS'] ?? '') === 'on' ? 'https' : 'http')
                             想让队列在没人开页面时也继续跑，在宝塔「计划任务」里加一条
                             <b>每分钟</b>访问下面地址的任务即可：
                         </p>
-                        <div class="tbl__name" style="margin-top:8px">
-                            <code style="flex:1;min-width:0;word-break:break-all"><?= e($cronUrl) ?></code>
+                        <div class="urlbox">
+                            <code><?= $cronHtml ?></code>
                             <button class="minibtn" type="button" data-copy-cron="<?= e($cronUrl) ?>" aria-label="复制地址"><?= lucide('copy') ?></button>
                         </div>
                     </div>

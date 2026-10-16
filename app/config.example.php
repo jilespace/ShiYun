@@ -50,6 +50,9 @@ return [
     // 找回密码时是否把重置链接直接回显在页面。
     // 仅本机/单人自部署可开启；多用户环境务必保持 false，否则任何人凭邮箱即可接管账号。
     'reset_link_in_response' => false,
+    // 是否开放自助注册。个人自用保持 false——登录页会显示「注册已关闭」，
+    // 注册接口同时被服务端拒绝（不是只藏起入口）。多人共用才改成 true。
+    'allow_registration'     => false,
     // PHP 与 MySQL 会话统一使用的时区
     'timezone'               => 'Asia/Shanghai',
 

@@ -113,8 +113,8 @@ $rssToken = $tokens[0]['id'] ?? null;
                         <dl class="kv">
                             <dt>WebDAV</dt>
                             <dd>
-                                <div class="tbl__name">
-                                    <code style="flex:1;min-width:0;word-break:break-all"><?= e($base . '/' . url('webdav.handle')) ?></code>
+                                <div class="urlbox">
+                                    <code><?= e($base . '/' . url('webdav.handle')) ?></code>
                                     <button class="minibtn" type="button" data-copy-webdav="<?= e($base . '/' . url('webdav.handle')) ?>" aria-label="复制"><?= lucide('copy') ?></button>
                                 </div>
                                 <p class="hint" style="margin-top:6px">用户名填邮箱或用户名，密码填网盘密码（也可填 API 令牌）。</p>

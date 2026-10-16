@@ -13,6 +13,11 @@ if (!defined('BASE_PATH')) {
 /** @var string|null $notice */
 /** @var string|null $resetLink */
 /** @var string|null $resetToken */
+/** @var bool $allowRegistration */
+/** @var bool $firstRun */
+
+$allowRegistration = $allowRegistration ?? false;
+$firstRun = $firstRun ?? false;
 
 $appName = (string) config('app_name');
 $appNameEn = (string) config('app_name_en');
@@ -86,7 +91,7 @@ $isRecovery = in_array($tab, ['forgot', 'reset'], true);
 
             <p class="lede">一块属于你的云端空间。上传、整理，随处取用。</p>
 
-            <div class="meter">
+            <div class="meter meter--hero">
                 <div class="meter__row">
                     <span class="meter__label">起步容量</span>
                     <span class="meter__val"><b>1</b> TB</span>
@@ -151,14 +156,42 @@ $isRecovery = in_array($tab, ['forgot', 'reset'], true);
                     </button>
                 </form>
 
-                <p class="pane__foot">还没有账号？<a href="<?= e(url('auth.register')) ?>" data-goto="register">去注册</a></p>
+                <p class="pane__foot">
+                    <?php if ($allowRegistration): ?>
+                        还没有账号？<a href="<?= e(url('auth.register')) ?>" data-goto="register">去注册</a>
+                    <?php else: ?>
+                        这个空间是私人部署，不开放自助注册。
+                    <?php endif; ?>
+                </p>
             </div>
             <?php endif; ?>
 
             <?php if ($tab === 'register'): ?>
             <div class="pane" data-pane="register">
-                <h2 class="pane__title">创建账号</h2>
-                <p class="pane__sub">几秒钟，开启你的云端空间。</p>
+                <?php if (!$allowRegistration): ?>
+                    <h2 class="pane__title">注册已关闭</h2>
+                    <p class="pane__sub">这个空间是私人部署，不开放自助注册。</p>
+
+                    <div class="note note--info">
+                        <?= lucide('lock', 'note__ico') ?>
+                        <span>需要账号请联系空间管理员，由管理员直接开通。</span>
+                    </div>
+
+                    <p class="pane__foot">
+                        已有账号？<a href="<?= e(url('auth.login')) ?>" data-goto="login">去登录</a>
+                    </p>
+                <?php else: ?>
+                <h2 class="pane__title"><?= $firstRun ? '创建第一个账号' : '创建账号' ?></h2>
+                <p class="pane__sub">
+                    <?= $firstRun ? '这是全新部署，先建一个账号再开始。' : '几秒钟，开启你的云端空间。' ?>
+                </p>
+
+                <?php if ($firstRun): ?>
+                    <div class="note note--info">
+                        <?= lucide('info', 'note__ico') ?>
+                        <span>建出这个账号后，自助注册会自动关闭。</span>
+                    </div>
+                <?php endif; ?>
 
                 <?= $alert($errors['form'] ?? null) ?>
 
@@ -227,6 +260,7 @@ $isRecovery = in_array($tab, ['forgot', 'reset'], true);
                 </form>
 
                 <p class="pane__foot">已有账号？<a href="<?= e(url('auth.login')) ?>" data-goto="login">去登录</a></p>
+                <?php endif; ?>
             </div>
             <?php endif; ?>
 

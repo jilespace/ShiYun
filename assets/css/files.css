@@ -8,6 +8,17 @@
     --bar: 60px;
     --row: 54px;
     --radius-sm: 3px;
+
+    /* 文件类型 → 颜色。单一来源：网格卡片和统计页的类型分布都引用这里。
+       两处曾经各有一份、且互不相同（图片在网格里是绿、在统计里是靛蓝，
+       压缩包还占用了 danger 红），同一种类型在不同页面换了张脸。 */
+    --kind-image: #4ad07a;
+    --kind-video: #8a88ff;
+    --kind-audio: #ffcf8a;
+    --kind-document: #7aa2ff;
+    --kind-archive: #ffa23a;
+    --kind-code: #3fd0c9;
+    --kind-other: rgba(244, 242, 236, 0.3);
 }
 
 /* 工作台里把画布压到几乎不可见——密集数据面前，背景不该抢注意力 */
@@ -674,6 +685,8 @@ body.is-app {
     color: var(--dim);
     font-family: inherit;
     font-size: 0.78rem;
+    /* 表格里空间紧张时，浏览器会把按钮文字逐字折断成竖排——按钮永远不折行 */
+    white-space: nowrap;
     cursor: pointer;
     transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
 }
@@ -1023,6 +1036,7 @@ body.is-app {
     aspect-ratio: 4 / 3;
     border-bottom: 1px solid var(--line);
     overflow: hidden;
+    background: rgba(255, 255, 255, 0.028);
     color: var(--dim-2);
 }
 
@@ -1040,9 +1054,9 @@ body.is-app {
     transition: opacity 0.2s ease, color 0.2s ease;
 }
 
+/* 悬停只提亮、不改色，否则会把类型色冲掉 */
 .card:hover .card__glyph {
     opacity: 1;
-    color: var(--signal-2);
 }
 
 .card__name {
@@ -1625,13 +1639,16 @@ body.is-app {
     cursor: default;
 }
 
-.card__art--image { background: rgba(74, 208, 122, 0.10); }
-.card__art--video { background: rgba(138, 136, 255, 0.12); }
-.card__art--audio { background: rgba(255, 207, 138, 0.12); }
-.card__art--document { background: rgba(122, 162, 255, 0.12); }
-.card__art--archive { background: rgba(255, 162, 58, 0.12); }
-.card__art--code { background: rgba(74, 208, 122, 0.12); }
-.card__art--other { background: rgba(244, 242, 236, 0.06); }
+/* 类型色落在图标上，而不是铺满整块底：近黑画布上大面积低透明度的色块会糊成
+   一片污渍，小面积的彩色图标才是精确的类型信号。
+   另：原先 image 与 code 共用同一个绿（只差透明度），PNG 和 PHP 无法区分，
+   这里给 code 换成青色。 */
+.card__art--image .card__glyph { color: var(--kind-image); }
+.card__art--video .card__glyph { color: var(--kind-video); }
+.card__art--audio .card__glyph { color: var(--kind-audio); }
+.card__art--document .card__glyph { color: var(--kind-document); }
+.card__art--archive .card__glyph { color: var(--kind-archive); }
+.card__art--code .card__glyph { color: var(--kind-code); }
 
 .badge--cos {
     background: rgba(244, 242, 236, 0.06);

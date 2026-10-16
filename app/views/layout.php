@@ -24,6 +24,10 @@ $layoutUser = Auth::check() ? Auth::user() : null;
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#08090b">
+    <?php /* 站点图标用内联 SVG（品牌图形 archive）：不新增文件，
+             也免去浏览器每次加载都去请求并不存在的 /favicon.ico。 */ ?>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a88ff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='20' height='5' x='2' y='3' rx='1'/%3E%3Cpath d='M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8'/%3E%3Cpath d='M10 12h4'/%3E%3C/svg%3E">
     <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
     <title><?= e($title ?? (string) config('app_name')) ?></title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>

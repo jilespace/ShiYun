@@ -194,7 +194,10 @@ if (!$isTrash) {
                                 <button type="button" role="menuitem" data-sort-key="<?= e($key) ?>"
                                         class="<?= $opts['sort'] === $key ? 'is-on' : '' ?>">
                                     <span><?= e($label) ?></span>
-                                    <?= lucide($opts['sort'] === $key && $opts['dir'] === 'desc' ? 'arrow-down' : 'arrow-up', 'sortmenu__ico') ?>
+                                    <?php /* 方向箭头只属于当前排序项——每项都挂一个 ↑ 会让方向失去意义 */ ?>
+                                    <?php if ($opts['sort'] === $key): ?>
+                                        <?= lucide($opts['dir'] === 'desc' ? 'arrow-down' : 'arrow-up', 'sortmenu__ico') ?>
+                                    <?php endif; ?>
                                 </button>
                             <?php endforeach; ?>
                         </div>
