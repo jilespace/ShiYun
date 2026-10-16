@@ -89,6 +89,10 @@ function api_route_list(int $userId): void
     $folderId = (int) ($_GET['folder'] ?? 0) ?: user_root_id($userId);
     $node = node_require($userId, $folderId);
 
+    if (node_in_private($userId, $node) && !Auth::privateUnlocked()) {
+        json_fail('私密空间已锁定。', 403, 'private_locked');
+    }
+
     json_ok([
         'folder'   => node_public($node),
         'crumbs'   => node_breadcrumb($userId, $folderId),
@@ -103,6 +107,9 @@ function api_route_list(int $userId): void
 function api_route_stat(int $userId): void
 {
     $node = node_require($userId, (int) ($_GET['id'] ?? 0));
+    if (node_in_private($userId, $node) && !Auth::privateUnlocked()) {
+        json_fail('私密空间已锁定。', 403, 'private_locked');
+    }
     $info = node_public(node_attach_meta($userId, [$node])[0]);
     $info['stats'] = $node['kind'] === 'folder'
         ? node_subtree_stats($userId, $node)
@@ -184,8 +191,16 @@ function api_route_delete(int $userId): void
     $hard = !empty($body['permanent']);
 
     $count = 0;
+    $skipped = 0;
     foreach (nodes_by_ids($userId, $ids) as $node) {
+        if (node_in_private($userId, $node) && !Auth::privateUnlocked()) {
+            json_fail('私密空间已锁定。', 403, 'private_locked');
+        }
         if ($hard) {
+            if ($node['deleted_at'] === null) {   // 与 Web 一致：彻底删除前必须先入回收站
+                $skipped++;
+                continue;
+            }
             node_purge($userId, $node);
         } else {
             node_trash($userId, $node);
@@ -194,7 +209,7 @@ function api_route_delete(int $userId): void
     }
 
     user_recompute_usage($userId);
-    json_ok(['count' => $count, 'permanent' => $hard]);
+    json_ok(['count' => $count, 'permanent' => $hard, 'skipped' => $skipped]);
 }
 
 function api_route_trash(int $userId): void
@@ -287,6 +302,9 @@ function api_route_download(int $userId): void
     $node = node_require($userId, (int) ($_GET['id'] ?? 0));
     if ($node['kind'] !== 'file' || $node['blob_id'] === null) {
         json_fail('该条目不是可下载的文件。', 404);
+    }
+    if (node_in_private($userId, $node) && !Auth::privateUnlocked()) {
+        json_fail('私密空间已锁定。', 403, 'private_locked');
     }
 
     activity_log($userId, 'file.download', (int) $node['id'], (string) $node['name']);

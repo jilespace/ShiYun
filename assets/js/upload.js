@@ -157,7 +157,7 @@
                 + '</div>'
                 + '<span class="qitem__bar"><span class="qitem__fill" style="width:' + pct + '%"></span></span>'
                 + '<div class="qitem__foot">'
-                + '<span>' + stateText + '</span>'
+                + '<span>' + escapeHtml(stateText) + '</span>'
                 + (it.status === 'running' ? '<span>' + humanSpeed(it.speed) + '</span>' : '')
                 + '<span>' + human(it.file.size) + '</span>'
                 + '<span class="qitem__acts">' + acts.join('') + '</span>'
@@ -240,6 +240,10 @@
         it.controller = new AbortController();
         it.lastTick = performance.now();
         it.lastBytes = 0;
+        // 续传/重试会重跑 run()，必须清零累计，否则进度会翻倍并超过 100%
+        it.uploaded = 0;
+        it.progress = 0;
+        it.speed = 0;
         render();
 
         try {
@@ -278,7 +282,7 @@
                 }
                 if (it.received.has(index)) {
                     it.uploaded += chunkLength(it, index);
-                    it.progress = it.file.size ? it.uploaded / it.file.size : 1;
+                    it.progress = it.file.size ? Math.min(0.999, it.uploaded / it.file.size) : 0.999;
                     continue;
                 }
 

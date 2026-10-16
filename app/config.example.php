@@ -31,7 +31,8 @@ return [
     ],
 
     // ------------------------------------------------------------ 运行时目录
-    // runtime/ 已被 nginx 拦截（直接访问返回 404），用户文件只能经 PHP 鉴权后读取
+    // runtime/ 必须被 Web 服务器拒绝直接访问（用户文件只能经 PHP 鉴权后读取）。
+    // nginx 请配置：location ^~ /runtime/ { deny all; return 404; }
     'session_path' => BASE_PATH . '/runtime/sessions',
     'storage_path' => BASE_PATH . '/runtime/storage',   // 内容寻址文件仓
     'chunk_path'   => BASE_PATH . '/runtime/chunks',    // 分片上传暂存
@@ -46,11 +47,17 @@ return [
     'lockout_seconds'    => 900,
     'reset_ttl'          => 1800,   // 找回密码令牌有效期
     'trash_retention'    => 30,     // 回收站默认保留天数
+    // 找回密码时是否把重置链接直接回显在页面。
+    // 仅本机/单人自部署可开启；多用户环境务必保持 false，否则任何人凭邮箱即可接管账号。
+    'reset_link_in_response' => false,
+    // PHP 与 MySQL 会话统一使用的时区
+    'timezone'               => 'Asia/Shanghai',
 
     // ---------------------------------------------------------------- 上传
     'chunk_size'   => 5 * 1024 * 1024,   // 分片大小 5 MiB
     'max_upload'   => 200 * 1024 ** 3,   // 单文件上限 200 GiB
     'max_extract'  => 20 * 1024 ** 3,    // 在线解压上限
+    'max_pack'     => 2 * 1024 ** 3,     // 打包下载总量上限
 
     // ---------------------------------------------------------------- 集成
     // 外部下载引擎（aria2 等）。未安装时离线下载仅支持 HTTP/FTP，BT/磁力会明确报错

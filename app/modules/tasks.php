@@ -183,7 +183,13 @@ function tasks_create(): void
 
     activity_log($userId, $kind === 'bt' ? 'task.bt' : 'task.offline', null, $title);
 
-    json_ok(['task' => task_public(q_one('SELECT * FROM transfer_tasks WHERE id = ?', [$id]))]);
+    $warnUrl = $kind === 'offline' ? $url : (preg_match('#^https?://#i', $url) === 1 ? $url : '');
+    $warnHost = $warnUrl !== '' ? (string) (parse_url($warnUrl, PHP_URL_HOST) ?: '') : '';
+
+    json_ok([
+        'task'    => task_public(q_one('SELECT * FROM transfer_tasks WHERE id = ?', [$id])),
+        'warning' => host_risk_note($warnHost),
+    ]);
 }
 
 /** 入队一个推送任务 */
@@ -332,6 +338,7 @@ function tasks_cron(): void
         'processed' => $processed,
         'users'     => count($userIds),
         'swept'     => tasks_sweep_uploads(),
+        'trash'     => tasks_sweep_trash(),
     ]);
 }
 
@@ -358,6 +365,23 @@ function tasks_sweep_uploads(int $ttlHours = UPLOAD_SESSION_TTL_HOURS): int
     return count($rows);
 }
 
+/** 计划任务里分批清理各用户过期的回收站条目（每用户每次有上限） */
+function tasks_sweep_trash(int $perUser = 100): int
+{
+    $cutoff = date('Y-m-d H:i:s', time() - (int) config('trash_retention') * 86400);
+    $uids = array_map('intval', array_column(
+        q_all('SELECT DISTINCT user_id FROM nodes WHERE deleted_at IS NOT NULL AND deleted_at < ?', [$cutoff]),
+        'user_id'
+    ));
+
+    $n = 0;
+    foreach ($uids as $uid) {
+        $days = (int) user_setting($uid, 'trash_retention_days', (int) config('trash_retention'));
+        $n += trash_purge_expired($uid, $days, $perUser);
+    }
+    return $n;
+}
+
 /* ============================================================ 任务推进器 */
 
 /**
@@ -377,26 +401,33 @@ function tasks_tick(int $userId, int $budgetSeconds = TASK_TICK_SECONDS): int
         if (microtime(true) >= $deadline) {
             break;
         }
+        // 原子抢占：仅当仍为 queued 时置为 running，成功者才执行，
+        // 避免与 tasks_cron / 页面加载并发时同一任务被处理两次
+        $claimed = q_exec(
+            "UPDATE transfer_tasks SET status = 'running', started_at = COALESCE(started_at, ?)
+             WHERE id = ? AND status = 'queued'",
+            [now(), (int) $task['id']]
+        );
+        if ($claimed === 0) {
+            continue;
+        }
+
         // 用户可能已经关掉页面，让下载继续跑完当前这一段
         @ignore_user_abort(true);
         @set_time_limit(0);
 
         if ($task['kind'] === 'offline') {
             task_run_offline($task, $deadline);
-            $processed++;
         } elseif ($task['kind'] === 'bt') {
             task_run_bt($task);
-            $processed++;
         } elseif ($task['kind'] === 'push') {
             task_run_push($task);
-            $processed++;
         } elseif ($task['kind'] === 'purge') {
             task_run_purge($task);
-            $processed++;
         } else {
             q_update('transfer_tasks', ['status' => 'done', 'progress' => 100, 'finished_at' => now()], 'id = ?', [(int) $task['id']]);
-            $processed++;
         }
+        $processed++;
     }
 
     return $processed;

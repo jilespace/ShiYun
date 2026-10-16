@@ -106,7 +106,6 @@ function preview_thumb(): void
         header('Content-Type: image/jpeg');
         header('Content-Length: ' . filesize($thumb));
         header('Cache-Control: private, max-age=86400');
-        header('X-Content-Type-Options: nosniff');
     }
     readfile($thumb);
     exit;
@@ -120,6 +119,9 @@ function preview_text(): void
 
     if ($node['kind'] !== 'file' || $node['blob_id'] === null) {
         json_fail('无法预览该条目。', 404);
+    }
+    if (node_in_private($userId, $node) && !Auth::privateUnlocked()) {
+        json_fail('私密空间已锁定。', 403, 'private_locked');
     }
 
     $size = (int) $node['size'];
@@ -166,6 +168,9 @@ function preview_office(): void
 
     if ($node['kind'] !== 'file' || $node['blob_id'] === null) {
         json_fail('无法预览该条目。', 404);
+    }
+    if (node_in_private($userId, $node) && !Auth::privateUnlocked()) {
+        json_fail('私密空间已锁定。', 403, 'private_locked');
     }
 
     $ext = (string) $node['ext'];

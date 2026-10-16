@@ -86,7 +86,15 @@
 
     async function runConfirmAction(btn) {
         const route = btn.dataset.api;
-        const payload = btn.dataset.payload ? JSON.parse(btn.dataset.payload) : {};
+        let payload = {};
+        if (btn.dataset.payload) {
+            try {
+                payload = JSON.parse(btn.dataset.payload);
+            } catch (e) {
+                toast('操作参数异常', 'err');
+                return;
+            }
+        }
         const question = btn.dataset.confirm || '确定执行该操作？';
 
         const ok = await SY.confirm(btn.dataset.title || '确认操作', question, btn.dataset.label || '确定', btn.dataset.danger === '1');
@@ -142,14 +150,19 @@
 
             const foot = $('[data-modal-foot]');
             foot.querySelector('[data-x="no"]').addEventListener('click', SY.closeModal);
-            foot.querySelector('[data-x="yes"]').addEventListener('click', async () => {
+            foot.querySelector('[data-x="yes"]').addEventListener('click', async (ev) => {
+                const btn = ev.currentTarget;
+                if (btn.disabled) return;
                 const name = document.querySelector('[data-name]').value.trim();
                 if (!name) return;
+                btn.disabled = true;
                 try {
                     await api('tags.create', { name, color });
                     location.reload();
                 } catch (err) {
                     toast(err.message, 'err');
+                } finally {
+                    if (btn.isConnected) btn.disabled = false;
                 }
             });
         });
@@ -242,10 +255,10 @@
         function fieldsFor(driver) {
             const info = drivers[driver];
             if (!info) return '';
-            return info.fields.map((f) => '<div class="mfield"><span class="mfield__label">'
+            return info.fields.map((f) => '<label class="mfield"><span class="mfield__label">'
                 + escapeHtml(f.label) + (f.required ? '' : '（可选）') + '</span>'
                 + '<input class="minput" data-cfg="' + escapeHtml(f.key) + '"'
-                + (f.secret ? ' type="password"' : '') + ' autocomplete="off"></div>').join('');
+                + (f.secret ? ' type="password"' : '') + ' autocomplete="off"></label>').join('');
         }
 
         $('#new-source')?.addEventListener('click', () => {
@@ -276,7 +289,10 @@
 
             const foot = $('[data-modal-foot]');
             foot.querySelector('[data-x="no"]').addEventListener('click', SY.closeModal);
-            foot.querySelector('[data-x="yes"]').addEventListener('click', async () => {
+            foot.querySelector('[data-x="yes"]').addEventListener('click', async (ev) => {
+                const btn = ev.currentTarget;
+                if (btn.disabled) return;
+                btn.disabled = true;
                 const config = {};
                 SY.$$('[data-cfg]', fieldHost).forEach((el) => { config[el.dataset.cfg] = el.value; });
 
@@ -289,6 +305,8 @@
                     location.reload();
                 } catch (err) {
                     toast(err.message, 'err');
+                } finally {
+                    if (btn.isConnected) btn.disabled = false;
                 }
             });
         });
@@ -300,10 +318,8 @@
                 try {
                     const r = await api('sources.test', { id: Number(test.dataset.sourceTest) });
                     toast(r.message, r.ok ? 'ok' : 'err');
-                    if (r.ok !== true) {
-                        // 失败时也刷新状态列
-                        setTimeout(() => location.reload(), 1200);
-                    }
+                    // 无论成败都刷新状态列，避免成功时仍显示旧状态
+                    setTimeout(() => location.reload(), 1200);
                 } catch (err) {
                     toast(err.message, 'err');
                 } finally {
@@ -334,12 +350,18 @@
 
     function pageTasks() {
         let timer = 0;
+        let inflight = false;
 
         async function refresh() {
+            if (inflight) return;   // 上一次轮询未完成则跳过，避免请求重叠与乱序覆盖
+            inflight = true;
             try {
                 const data = await api('tasks.data', {}, { method: 'GET' });
                 const host = $('[data-task-rows]');
                 if (!host) return;
+
+                const countEl = $('[data-task-count]');
+                if (countEl) countEl.textContent = data.tasks.length + ' 个';
 
                 if (!data.tasks.length) {
                     host.innerHTML = '';
@@ -383,6 +405,8 @@
                 }).join('');
             } catch (err) {
                 /* 静默：轮询失败不打扰用户 */
+            } finally {
+                inflight = false;
             }
         }
 
@@ -434,6 +458,16 @@
 
         refresh();
         timer = window.setInterval(refresh, 2000);
+        // 切到后台暂停轮询，回到前台立即刷新
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                clearInterval(timer);
+                timer = 0;
+            } else if (!timer) {
+                refresh();
+                timer = window.setInterval(refresh, 2000);
+            }
+        });
         window.addEventListener('beforeunload', () => clearInterval(timer));
     }
 
@@ -531,12 +565,18 @@
 
             const foot = $('[data-modal-foot]');
             foot.querySelector('[data-x="no"]').addEventListener('click', SY.closeModal);
-            foot.querySelector('[data-x="yes"]').addEventListener('click', async () => {
+            foot.querySelector('[data-x="yes"]').addEventListener('click', async (ev) => {
+                const btn = ev.currentTarget;
+                if (btn.disabled) return;
+                btn.disabled = true;
                 try {
                     const r = await api('api.tokens_create', {
                         name: document.querySelector('[data-name]').value.trim() || 'API 令牌',
                         days: Number(document.querySelector('[data-days]').value),
                     });
+
+                    const modalEl = document.querySelector('[data-modal]');
+                    if (modalEl && modalEl.hidden) return;   // 用户已关闭弹窗，不再弹回
 
                     SY.openModal('令牌已生成',
                         '<div class="mwarn">' + icon('alert-triangle')
@@ -561,6 +601,8 @@
                     });
                 } catch (err) {
                     toast(err.message, 'err');
+                } finally {
+                    if (btn.isConnected) btn.disabled = false;
                 }
             });
         });
@@ -602,8 +644,8 @@
         }
 
         function actionRow(index) {
-            const folderOpts = folders.map((f) => '<option value="' + f.name + '">' + f.name + '</option>').join('');
-            const colorOpts = palette.map((c) => '<option value="' + c + '">' + c + '</option>').join('');
+            const folderOpts = folders.map((f) => '<option value="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + '</option>').join('');
+            const colorOpts = palette.map((c) => '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>').join('');
 
             return '<div class="mfield" data-action-row style="margin-top:12px">'
                 + '<span class="mfield__label">动作 ' + (index + 1) + '</span>'
@@ -673,7 +715,10 @@
 
             const foot = $('[data-modal-foot]');
             foot.querySelector('[data-x="no"]').addEventListener('click', SY.closeModal);
-            foot.querySelector('[data-x="yes"]').addEventListener('click', async () => {
+            foot.querySelector('[data-x="yes"]').addEventListener('click', async (ev) => {
+                const btn = ev.currentTarget;
+                if (btn.disabled) return;
+                btn.disabled = true;
                 const conditions = {};
                 SY.$$('[data-cond]', body).forEach((el) => {
                     if (el.value.trim() !== '') conditions[el.dataset.cond] = el.value.trim();
@@ -694,6 +739,8 @@
                     setTimeout(() => location.reload(), 600);
                 } catch (err) {
                     toast(err.message, 'err');
+                } finally {
+                    if (btn.isConnected) btn.disabled = false;
                 }
             });
         });

@@ -104,9 +104,9 @@ $backUrl = $parent !== null && $parent['kind'] === 'folder'
 
 <div class="modal" data-modal hidden>
     <div class="modal__scrim" data-modal-close></div>
-    <div class="modal__panel" role="dialog" aria-modal="true">
+    <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="preview-modal-title">
         <header class="modal__head">
-            <h2 class="modal__title" data-modal-title></h2>
+            <h2 class="modal__title" id="preview-modal-title" data-modal-title></h2>
             <button class="iconbtn" type="button" data-modal-close aria-label="关闭"><?= lucide('x') ?></button>
         </header>
         <div class="modal__body" data-modal-body></div>

@@ -70,7 +70,7 @@
         if (n.hidden) out += '<span class="badge" title="已隐藏">' + icon('eye-off', 'badge__ico') + '</span>';
         if (n.favorite) out += '<span class="badge badge--star" title="已收藏">' + icon('star', 'badge__ico') + '</span>';
         if (n.shareCount > 0) out += '<span class="badge" title="已分享">' + icon('link-2', 'badge__ico') + '</span>';
-        if (n.memberCount > 0) out += '<span class="badge" title="协作中">' + icon('user', 'badge__ico') + '</span>';
+        if (n.memberCount > 0) out += '<span class="badge" title="协作中">' + icon('users', 'badge__ico') + '</span>';
         const cos = COS_STATE[n.cosStatus];
         if (cos) out += '<span class="badge badge--cos badge--cos-' + escapeHtml(n.cosStatus) + '" title="' + cos[1] + '">' + icon(cos[0], 'badge__ico') + '</span>';
         return out;
@@ -205,8 +205,11 @@
 
     /* ══════════════════════════════════════════════════════════ 加载目录 */
 
+    let loadSeq = 0;
+
     async function loadFolder(folderId, push) {
-        if (state.busy) return;
+        // 用请求序号代替 busy 丢弃：并发导航/排序时保留最后一次，过期结果直接作废
+        const seq = ++loadSeq;
         state.busy = true;
         listHead.style.opacity = '0.4';
 
@@ -218,6 +221,8 @@
                 dir: state.dir,
                 type: 'all',
             }, { method: 'GET' });
+
+            if (seq !== loadSeq) return;   // 已有更新的请求，本次结果作废
 
             state.folder = folderId;
             app.dataset.folder = String(folderId);
@@ -234,10 +239,13 @@
                 document.title = data.folder.name + ' · 拾云';
             }
         } catch (err) {
+            if (seq !== loadSeq) return;
             toast(err.message, 'err');
         } finally {
-            state.busy = false;
-            listHead.style.opacity = '';
+            if (seq === loadSeq) {
+                state.busy = false;
+                listHead.style.opacity = '';
+            }
         }
     }
 
@@ -256,11 +264,6 @@
         }).join('');
     }
 
-    function updateQuota(stats) {
-        if (!stats || !CFG.user) return;
-        CFG.user.used = Number(CFG.user.used);
-    }
-
     /* ══════════════════════════════════════════════════════════ 视图与排序 */
 
     $$('[data-view-set]').forEach((btn) => {
@@ -269,7 +272,11 @@
             if (view === state.view) return;
             state.view = view;
             app.dataset.view = view;
-            $$('[data-view-set]').forEach((b) => b.classList.toggle('is-on', b === btn));
+            $$('[data-view-set]').forEach((b) => {
+                const on = b === btn;
+                b.classList.toggle('is-on', on);
+                b.setAttribute('aria-pressed', on ? 'true' : 'false');
+            });
             try {
                 await api('files.view', { view: view });
             } catch (err) {
@@ -675,7 +682,10 @@
             + '<button class="mbtn mbtn--primary" type="button" data-x="yes">生成链接</button>');
 
         modalFoot.querySelector('[data-x="no"]').addEventListener('click', closeModal);
-        modalFoot.querySelector('[data-x="yes"]').addEventListener('click', async () => {
+        modalFoot.querySelector('[data-x="yes"]').addEventListener('click', async (ev) => {
+            const btn = ev.currentTarget;
+            if (btn.disabled) return;
+            btn.disabled = true;
             try {
                 const data = await api('shares.create', {
                     id: id,
@@ -684,6 +694,8 @@
                     password: modalBody.querySelector('[data-pass]').value,
                 });
                 const link = new URL(data.share.url, location.href).href;
+                const modalEl = document.querySelector('[data-modal]');
+                if (modalEl && modalEl.hidden) return;   // 用户已关闭弹窗，不再弹回
                 openModal('分享已创建',
                     '<div class="mfield"><span class="mfield__label">分享链接</span>'
                     + '<input class="minput" data-link readonly value="' + escapeHtml(link) + '"></div>'
@@ -711,6 +723,8 @@
                 });
             } catch (err) {
                 toast(err.message, 'err');
+            } finally {
+                if (btn.isConnected) btn.disabled = false;
             }
         });
     }
@@ -765,8 +779,8 @@
 
         ctx.hidden = false;
         const rect = ctx.getBoundingClientRect();
-        ctx.style.left = Math.min(x, window.innerWidth - rect.width - 10) + 'px';
-        ctx.style.top = Math.min(y, window.innerHeight - rect.height - 10) + 'px';
+        ctx.style.left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 10)) + 'px';
+        ctx.style.top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 10)) + 'px';
 
         ctx.onclick = (e) => {
             const btn = e.target.closest('[data-ctx-act]');
@@ -1131,13 +1145,14 @@
     document.addEventListener('keydown', (e) => {
         const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || ''));
 
-        if (e.key === '/' && !typing) {
+        if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey) {
             e.preventDefault();
             $('.omni__in').focus();
             return;
         }
         if (e.key === 'Escape') {
-            if (!modal.hidden) { closeModal(); return; }
+            const modalEl = $('[data-modal]');
+            if (modalEl && !modalEl.hidden) { closeModal(); return; }
             if (!ctx.hidden) { closeCtx(); return; }
             if (state.picked.size) { state.picked.clear(); syncBulk(); }
             return;

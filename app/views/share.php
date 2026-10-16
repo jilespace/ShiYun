@@ -63,11 +63,11 @@ $crumbs = array_values(array_filter($crumbs, static fn (array $c): bool => (int)
                 <form method="post" action="<?= e(url('shares.unlock')) ?>">
                     <?= csrf_field() ?>
                     <input type="hidden" name="t" value="<?= e($token) ?>">
-                    <div class="mfield">
+                    <label class="mfield">
                         <span class="mfield__label">提取密码</span>
                         <input class="minput" name="password" type="password" required autofocus
                                autocomplete="off" placeholder="请输入分享者给你的密码">
-                    </div>
+                    </label>
                     <div class="formactions">
                         <button class="mbtn mbtn--primary" type="submit">解锁查看</button>
                     </div>

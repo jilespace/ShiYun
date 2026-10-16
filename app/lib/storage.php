@@ -343,7 +343,6 @@ function blob_stream(int $blobId, string $mime, string $filename, bool $inline, 
         header('Content-Length: ' . $length);
         header('Content-Disposition: ' . ($inline ? 'inline' : 'attachment') . '; filename="'
             . rawurlencode($filename) . '"; filename*=UTF-8\'\'' . rawurlencode($filename));
-        header('X-Content-Type-Options: nosniff');
         header('Cache-Control: private, max-age=0, must-revalidate');
         if ($partial) {
             header(sprintf('Content-Range: bytes %d-%d/%d', $start, $end, $size));

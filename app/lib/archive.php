@@ -62,17 +62,25 @@ function zip_stream_nodes(int $userId, array $nodes, string $downloadName): neve
     $used = [];
     $totalBytes = 0;
     $topLevel = count($nodes) > 1;
+    $hashes = archive_prefetch_hashes($userId, $nodes);
 
-    foreach ($nodes as $node) {
-        if ($node['deleted_at'] !== null) {
-            continue;
+    try {
+        foreach ($nodes as $node) {
+            if ($node['deleted_at'] !== null) {
+                continue;
+            }
+            $prefix = $topLevel ? safe_zip_name((string) $node['name']) . '/' : '';
+            if ($node['kind'] === 'folder') {
+                zip_add_folder($zip, $userId, $node, $prefix, $used, $totalBytes, $hashes);
+            } else {
+                zip_add_file($zip, $node, $prefix . (string) $node['name'], $used, $totalBytes, $hashes);
+            }
         }
-        $prefix = $topLevel ? safe_zip_name((string) $node['name']) . '/' : '';
-        if ($node['kind'] === 'folder') {
-            zip_add_folder($zip, $userId, $node, $prefix, $used, $totalBytes);
-        } else {
-            zip_add_file($zip, $node, $prefix . (string) $node['name'], $used, $totalBytes);
-        }
+    } catch (RuntimeException $e) {
+        $zip->close();
+        @unlink($tmp);
+        http_response_code(413);
+        exit($e->getMessage());
     }
 
     $zip->close();
@@ -91,7 +99,6 @@ function zip_stream_nodes(int $userId, array $nodes, string $downloadName): neve
         header('Content-Length: ' . filesize($tmp));
         header('Content-Disposition: attachment; filename="' . rawurlencode($downloadName)
             . '"; filename*=UTF-8\'\'' . rawurlencode($downloadName));
-        header('X-Content-Type-Options: nosniff');
         header('Cache-Control: no-store');
     }
 
@@ -104,7 +111,42 @@ function zip_stream_nodes(int $userId, array $nodes, string $downloadName): neve
     exit;
 }
 
-function zip_add_folder(ZipArchive $zip, int $userId, array $folder, string $prefix, array &$used, int &$totalBytes): void
+/** 预取所选子树内所有文件的 blob_id→hash，避免逐文件查询 */
+function archive_prefetch_hashes(int $userId, array $nodes): array
+{
+    $blobIds = [];
+    $folderPaths = [];
+    foreach ($nodes as $node) {
+        if ($node['kind'] === 'file' && $node['blob_id'] !== null) {
+            $blobIds[(int) $node['blob_id']] = (int) $node['blob_id'];
+        } elseif ($node['kind'] === 'folder') {
+            $folderPaths[] = (string) $node['path'] . '%';
+        }
+    }
+    foreach ($folderPaths as $p) {
+        foreach (q_all(
+            'SELECT blob_id FROM nodes WHERE user_id = ? AND kind = ? AND deleted_at IS NULL AND path LIKE ?',
+            [$userId, 'file', $p]
+        ) as $r) {
+            if ($r['blob_id'] !== null) {
+                $blobIds[(int) $r['blob_id']] = (int) $r['blob_id'];
+            }
+        }
+    }
+    if ($blobIds === []) {
+        return [];
+    }
+
+    $ids = array_values($blobIds);
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $map = [];
+    foreach (q_all("SELECT id, hash FROM blobs WHERE id IN ({$in})", $ids) as $r) {
+        $map[(int) $r['id']] = (string) $r['hash'];
+    }
+    return $map;
+}
+
+function zip_add_folder(ZipArchive $zip, int $userId, array $folder, string $prefix, array &$used, int &$totalBytes, array $hashes): void
 {
     $children = q_all(
         'SELECT * FROM nodes WHERE user_id = ? AND parent_id = ? AND deleted_at IS NULL
@@ -120,19 +162,19 @@ function zip_add_folder(ZipArchive $zip, int $userId, array $folder, string $pre
     foreach ($children as $child) {
         $path = $prefix . safe_zip_name((string) $folder['name']) . '/';
         if ($child['kind'] === 'folder') {
-            zip_add_folder($zip, $userId, $child, $path, $used, $totalBytes);
+            zip_add_folder($zip, $userId, $child, $path, $used, $totalBytes, $hashes);
         } else {
-            zip_add_file($zip, $child, $path . safe_zip_name((string) $child['name']), $used, $totalBytes);
+            zip_add_file($zip, $child, $path . safe_zip_name((string) $child['name']), $used, $totalBytes, $hashes);
         }
     }
 }
 
-function zip_add_file(ZipArchive $zip, array $node, string $entry, array &$used, int &$totalBytes): void
+function zip_add_file(ZipArchive $zip, array $node, string $entry, array &$used, int &$totalBytes, array $hashes): void
 {
     if ($node['blob_id'] === null) {
         return;
     }
-    $hash = (string) q_val('SELECT hash FROM blobs WHERE id = ?', [(int) $node['blob_id']]);
+    $hash = (string) ($hashes[(int) $node['blob_id']] ?? '');
     if ($hash === '') {
         return;
     }
@@ -141,9 +183,15 @@ function zip_add_file(ZipArchive $zip, array $node, string $entry, array &$used,
         return;
     }
 
+    $size = (int) filesize($path);
+    $cap = (int) config('max_pack', 2 * 1024 ** 3);
+    if ($cap > 0 && $totalBytes + $size > $cap) {
+        throw new RuntimeException('打包体积超过上限 ' . format_bytes((float) $cap) . '，请分批下载。');
+    }
+
     $entry = unique_zip_entry($entry, $used);
     $zip->addFile($path, $entry);
-    $totalBytes += (int) filesize($path);
+    $totalBytes += $size;
 }
 
 /* -------------------------------------------------------------- 在线解压 */
@@ -441,16 +489,23 @@ function compress_nodes(int $userId, array $ids, string $name, int $targetParent
     $used = [];
     $bytes = 0;
     $single = count($nodes) === 1;
+    $hashes = archive_prefetch_hashes($userId, $nodes);
 
-    foreach ($nodes as $node) {
-        $prefix = $single ? '' : safe_zip_name((string) $node['name']) . '/';
-        if ($node['kind'] === 'folder') {
-            zip_add_folder($zip, $userId, $node, $prefix, $used, $bytes);
-        } else {
-            zip_add_file($zip, $node, $prefix . (string) $node['name'], $used, $bytes);
+    try {
+        foreach ($nodes as $node) {
+            $prefix = $single ? '' : safe_zip_name((string) $node['name']) . '/';
+            if ($node['kind'] === 'folder') {
+                zip_add_folder($zip, $userId, $node, $prefix, $used, $bytes, $hashes);
+            } else {
+                zip_add_file($zip, $node, $prefix . (string) $node['name'], $used, $bytes, $hashes);
+            }
         }
+        $zip->close();
+    } catch (RuntimeException $e) {
+        $zip->close();
+        @unlink($tmp);
+        throw $e;
     }
-    $zip->close();
 
     if (!is_file($tmp) || $bytes === 0) {
         @unlink($tmp);

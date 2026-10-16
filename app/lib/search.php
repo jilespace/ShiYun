@@ -212,43 +212,87 @@ function search_nodes(int $userId, array $f): array
         $params
     );
 
+    // 片段与所在路径改为批量取回，避免逐行 N+1
+    $snippets = [];
+    if ($q !== '' && ($scope === 'content' || $scope === 'all') && $rows !== []) {
+        $snippets = search_snippets_batch(array_map(static fn (array $r): int => (int) $r['id'], $rows), $q);
+    }
+    $paths = search_paths_batch($userId, $rows);
+
     $items = [];
     foreach (node_attach_meta($userId, $rows) as $row) {
         $item = node_public($row);
-        $item['snippet'] = search_snippet($userId, (int) $row['id'], $q, $scope);
-        $item['pathText'] = search_path_text($userId, $row);
+        $item['snippet'] = $snippets[(int) $row['id']] ?? null;
+        $item['pathText'] = $paths[(int) $row['id']] ?? '';
         $items[] = $item;
     }
 
     return ['items' => $items, 'total' => $total, 'facets' => search_facets($userId)];
 }
 
-/** 命中片段：把关键词前后的内容摘出来 */
-function search_snippet(int $userId, int $nodeId, string $q, string $scope): ?string
+/** 批量取命中片段：用 LOCATE/SUBSTRING 只取窗口，避免把整段文本读进内存 */
+function search_snippets_batch(array $nodeIds, string $q): array
 {
-    if ($q === '' || ($scope !== 'content' && $scope !== 'all')) {
-        return null;
+    $nodeIds = array_values(array_filter(array_map('intval', $nodeIds), static fn (int $i): bool => $i > 0));
+    if ($nodeIds === []) {
+        return [];
     }
-    $text = q_val('SELECT text_content FROM file_index WHERE node_id = ?', [$nodeId]);
-    if (!is_string($text) || $text === '') {
-        return null;
-    }
+    $in = implode(',', array_fill(0, count($nodeIds), '?'));
+    $needle = mb_strtolower($q);
 
-    $pos = mb_stripos($text, $q);
-    if ($pos === false) {
-        return null;
+    $out = [];
+    foreach (q_all(
+        "SELECT node_id,
+                LOCATE(?, LOWER(text_content)) AS pos,
+                SUBSTRING(text_content, GREATEST(1, LOCATE(?, LOWER(text_content)) - 40), 200) AS snip
+         FROM file_index WHERE node_id IN ({$in})",
+        [$needle, $needle, ...$nodeIds]
+    ) as $r) {
+        $pos = (int) $r['pos'];
+        if ($pos <= 0 || (string) $r['snip'] === '') {
+            continue;
+        }
+        $out[(int) $r['node_id']] = ($pos > 41 ? '…' : '') . (string) $r['snip'] . '…';
     }
-
-    $start = max(0, $pos - 40);
-    $snippet = mb_substr($text, $start, 160);
-    return ($start > 0 ? '…' : '') . $snippet . '…';
+    return $out;
 }
 
-/** 节点所在路径的可读文本 */
-function search_path_text(int $userId, array $node): string
+/** 批量还原节点所在路径文本（一次取回全部祖先名） */
+function search_paths_batch(int $userId, array $rows): array
 {
-    $crumbs = node_breadcrumb($userId, (int) ($node['parent_id'] ?? 0));
-    return implode(' / ', array_map(static fn (array $c): string => (string) $c['name'], $crumbs));
+    $rootId = user_root_id($userId);
+    $rowIds = [];
+    $need = [];
+    foreach ($rows as $row) {
+        $ids = array_values(array_filter(
+            explode('/', trim((string) $row['path'], '/')),
+            static fn (string $v): bool => $v !== ''
+        ));
+        array_pop($ids);   // 末段是自身，路径文本不含自身
+        $rowIds[(int) $row['id']] = $ids;
+        foreach ($ids as $i) {
+            $need[(int) $i] = (int) $i;
+        }
+    }
+
+    $names = [];
+    if ($need !== []) {
+        $in = implode(',', array_fill(0, count($need), '?'));
+        foreach (q_all("SELECT id, name FROM nodes WHERE user_id = ? AND id IN ({$in})", [$userId, ...array_values($need)]) as $r) {
+            $names[(int) $r['id']] = (string) $r['name'];
+        }
+    }
+
+    $out = [];
+    foreach ($rowIds as $nid => $ids) {
+        $crumbs = [];
+        foreach ($ids as $i) {
+            $i = (int) $i;
+            $crumbs[] = $i === $rootId ? '我的文件' : ($names[$i] ?? '…');
+        }
+        $out[$nid] = implode(' / ', $crumbs);
+    }
+    return $out;
 }
 
 /** 把用户输入转成 BOOLEAN MODE 查询串 */

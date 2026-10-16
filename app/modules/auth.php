@@ -161,12 +161,18 @@ function auth_do_forgot(): void
 
     if (!csrf_verify(is_string($_POST['csrf_token'] ?? null) ? $_POST['csrf_token'] : null)) {
         auth_render('forgot', ['errors' => ['form' => '会话已过期，请重新提交。']]);
+        return;
     }
 
     // 无论账号是否存在都给出相同回应，避免枚举用户
     $notice = '如果该邮箱已注册，我们已生成重置链接。';
     $user = find_user_by_email($email);
     $resetLink = null;
+
+    $mailConfigured = function_exists('mail') && (bool) config('mail_enabled', false);
+    // 仅当显式开启（本机/单人自部署）才允许把重置链接回显在页面；
+    // 多用户环境下默认关闭，否则任何人凭邮箱即可接管他人账号。
+    $linkAllowed = (bool) config('reset_link_in_response', false);
 
     if ($user !== null) {
         $token = random_token(24);
@@ -179,11 +185,21 @@ function auth_do_forgot(): void
 
         $resetLink = url('auth.reset', ['token' => $token]);
 
-        // 未配置邮件服务时，直接把链接交给用户（本机部署场景）
-        if (function_exists('mail') && (bool) config('mail_enabled', false)) {
+        if ($mailConfigured) {
+            // 配置了邮件服务：发信，不在响应里回显链接
             @mail($email, '拾云 · 重设密码', "重设链接：{$resetLink}");
             $resetLink = null;
+        } elseif (!$linkAllowed) {
+            // 默认：不回显链接，仅写日志供管理员处置
+            error_log('[auth.forgot] reset link for ' . $email . ': ' . $resetLink);
+            $resetLink = null;
         }
+        // $mailConfigured 为假且 $linkAllowed 为真时，$resetLink 保留回显
+    }
+
+    // 统一补充措辞：对"存在/不存在"的邮箱一视同仁，避免账号枚举
+    if (!$mailConfigured && !$linkAllowed) {
+        $notice .= '（当前未配置邮件服务，请联系管理员获取重置链接。）';
     }
 
     auth_render('forgot', [

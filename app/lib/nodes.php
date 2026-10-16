@@ -643,6 +643,14 @@ function node_purge(int $userId, array $node): void
 
         $ids = array_map(static fn (array $r): int => (int) $r['id'], $rows);
         $in = implode(',', array_fill(0, count($ids), '?'));
+
+        // 历史版本各自持有一次 blob 引用（version_snapshot 时 +1），删除节点时必须一并释放，
+        // 否则 ref_count 永不归零、物理文件与远程副本（purge 任务）永不清理。
+        foreach (q_all("SELECT blob_id, size FROM node_versions WHERE node_id IN ({$in})", $ids) as $v) {
+            blob_release((int) $v['blob_id']);
+            $freedBytes += (int) $v['size'];
+        }
+
         q_exec("DELETE FROM node_tags WHERE node_id IN ({$in})", $ids);
         q_exec("DELETE FROM node_versions WHERE node_id IN ({$in})", $ids);
         q_exec("DELETE FROM file_index WHERE node_id IN ({$in})", $ids);
@@ -657,14 +665,15 @@ function node_purge(int $userId, array $node): void
 }
 
 /** 回收站过期清理 */
-function trash_purge_expired(int $userId, int $retentionDays): int
+function trash_purge_expired(int $userId, int $retentionDays, int $limit = 200): int
 {
     if ($retentionDays <= 0) {
         return 0;
     }
     $cutoff = date('Y-m-d H:i:s', time() - $retentionDays * 86400);
     $rows = q_all(
-        'SELECT * FROM nodes WHERE user_id = ? AND deleted_at IS NOT NULL AND deleted_at < ? AND parent_id = ?',
+        'SELECT * FROM nodes WHERE user_id = ? AND deleted_at IS NOT NULL AND deleted_at < ? AND parent_id = ?
+         ORDER BY deleted_at ASC LIMIT ' . max(1, min(1000, $limit)),
         [$userId, $cutoff, user_trash_id($userId)]
     );
 

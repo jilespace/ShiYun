@@ -23,13 +23,16 @@
     --bg: #08090b;
     --panel: rgba(14, 16, 20, 0.66);
     --ink: #f4f2ec;
-    --dim: rgba(244, 242, 236, 0.52);
-    --dim-2: rgba(244, 242, 236, 0.32);
+    --dim: rgba(244, 242, 236, 0.62);
+    --dim-2: rgba(244, 242, 236, 0.55);
     --line: rgba(244, 242, 236, 0.11);
-    --line-2: rgba(244, 242, 236, 0.2);
+    --line-2: rgba(244, 242, 236, 0.28);
     --signal: #3d3aff;
     --signal-2: #8a88ff;
     --danger: #ff5a5a;
+    --ok: #4ad07a;
+    --warn: #ffa23a;
+    --info: #8a88ff;
 
     --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei",
         "Noto Sans SC", "Source Han Sans SC", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -462,6 +465,17 @@ a {
     color: var(--danger);
 }
 
+/* 中性/信息类提示：避免中性通知被渲染成红色错误框 */
+.note--info {
+    color: #b9c2ff;
+    background: rgba(138, 136, 255, 0.10);
+    border-color: rgba(138, 136, 255, 0.28);
+}
+
+.note--info .note__ico {
+    color: var(--signal-2);
+}
+
 /* --------------------------------------------------------------- 表单 */
 
 .form {
@@ -534,7 +548,7 @@ a {
 }
 
 .fld__in::placeholder {
-    color: rgba(244, 242, 236, 0.28);
+    color: rgba(244, 242, 236, 0.45);
 }
 
 .fld__in:-webkit-autofill {
@@ -1215,4 +1229,76 @@ select optgroup {
         animation-iteration-count: 1 !important;
         transition-duration: 0.001ms !important;
     }
+}
+
+
+/* ── 认证页缺失类名补全 ── */
+.form__aux {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 12px;
+    font-size: 0.85rem;
+}
+
+.link-quiet {
+    color: var(--dim);
+    text-decoration: none;
+}
+
+.link-quiet:hover {
+    color: var(--ink);
+}
+
+.tabs--plain {
+    border-bottom: 0;
+}
+
+.tab__ico {
+    width: 16px;
+    height: 16px;
+    flex: none;
+}
+
+.linkbox {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.linkbox__label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--dim-2);
+    font-size: 0.8rem;
+}
+
+.linkbox__ico {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    color: var(--signal-2);
+}
+
+.linkbox__url {
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    word-break: break-all;
+}
+
+.foot__c {
+    color: var(--dim-2);
+    font-size: 0.8rem;
+}
+
+.status__text {
+    color: var(--dim);
 }

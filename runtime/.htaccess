@@ -1,0 +1,2 @@
+# 拒绝一切直接访问（Apache 环境生效；nginx 环境无害，需另行按文档配置 location）
+Require all denied

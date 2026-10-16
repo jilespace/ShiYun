@@ -155,10 +155,17 @@ function user_private_id(int $userId): int
 function user_recompute_usage(int $userId): int
 {
     // 回收站与私密空间同样占用配额，避免用删除来绕过容量限制
-    $used = (int) q_val(
+    $nodeBytes = (int) q_val(
         'SELECT COALESCE(SUM(size), 0) FROM nodes WHERE user_id = ? AND kind = ?',
         [$userId, 'file']
     );
+    // 历史版本同样占盘，必须计入；否则反复覆盖上传可无限占用磁盘而不涨配额
+    $versionBytes = (int) q_val(
+        'SELECT COALESCE(SUM(v.size), 0) FROM node_versions v
+         JOIN nodes n ON n.id = v.node_id WHERE n.user_id = ?',
+        [$userId]
+    );
+    $used = $nodeBytes + $versionBytes;
     q_update('users', ['used_bytes' => $used], 'id = ?', [$userId]);
     return $used;
 }

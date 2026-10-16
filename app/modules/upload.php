@@ -180,21 +180,26 @@ function upload_chunk(): void
     }
     @chmod($target, 0600);
 
-    $received = json_decode((string) $session['received'], true);
-    if (!is_array($received)) {
-        $received = [];
-    }
-    $received[$index] = $written;
-
-    $totalBytes = array_sum($received);
-    $status = count($received) >= (int) $session['total_chunks'] ? 'uploading' : 'pending';
-
-    q_update('upload_sessions', [
-        'received'       => json_encode($received),
-        'received_bytes' => $totalBytes,
-        'status'         => $status,
-        'updated_at'     => now(),
-    ], 'id = ?', [(int) $session['id']]);
+    // 分片汇总用行锁串行化，避免并发上报时 read-modify-write 互相覆盖丢分片
+    $received = [];
+    $totalBytes = 0;
+    db_tx(static function () use ($session, $index, $written, &$received, &$totalBytes): void {
+        $row = q_one('SELECT received, total_chunks FROM upload_sessions WHERE id = ? FOR UPDATE', [(int) $session['id']]);
+        if ($row === null) {
+            return;
+        }
+        $buf = json_decode((string) $row['received'], true);
+        $buf = is_array($buf) ? $buf : [];
+        $buf[$index] = $written;
+        $received = $buf;
+        $totalBytes = array_sum($buf);
+        q_update('upload_sessions', [
+            'received'       => json_encode($buf),
+            'received_bytes' => $totalBytes,
+            'status'         => count($buf) >= (int) $row['total_chunks'] ? 'uploading' : 'pending',
+            'updated_at'     => now(),
+        ], 'id = ?', [(int) $session['id']]);
+    });
 
     json_ok([
         'received' => count($received),

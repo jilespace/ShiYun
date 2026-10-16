@@ -36,7 +36,7 @@ $query = $query ?? '';
         <a class="iconbtn" href="<?= e(url('settings.show')) ?>" aria-label="设置"><?= lucide('settings') ?></a>
 
         <div class="who" data-who>
-            <button class="who__btn" type="button" data-who-btn aria-haspopup="menu" aria-expanded="false">
+            <button class="who__btn" type="button" data-who-btn aria-haspopup="menu" aria-expanded="false" aria-label="账户菜单">
                 <span class="who__avatar"><?= e(mb_substr((string) $user['display_name'], 0, 1)) ?></span>
             </button>
             <div class="who__menu" data-who-menu hidden role="menu">

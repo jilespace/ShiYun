@@ -78,6 +78,9 @@ if (!defined('BASE_PATH')) {
                                         <td>
                                             <div class="tbl__name"><?= lucide('server') ?>
                                                 <span><?= e((string) $src['name']) ?></span></div>
+                                                <?php if (!empty($src['riskNote'])): ?>
+                                                    <div class="muted" style="color:#ffa23a;margin-top:2px"><?= e((string) $src['riskNote']) ?></div>
+                                                <?php endif; ?>
                                         </td>
                                         <td class="muted"><?= e((string) $src['driverLabel']) ?></td>
                                         <td>

@@ -29,7 +29,7 @@ $privateOpen = Auth::privateUnlocked();
     <nav class="spine__nav" aria-label="主导航">
         <?php foreach (app_nav() as $item): ?>
             <a class="spine__item<?= $section === $item['id'] ? ' is-active' : '' ?>"
-               href="<?= e($item['href']) ?>" data-nav="<?= e($item['id']) ?>">
+               href="<?= e($item['href']) ?>" data-nav="<?= e($item['id']) ?>"<?= $section === $item['id'] ? ' aria-current="page"' : '' ?>>
                 <?= lucide($item['icon'], 'spine__ico') ?>
                 <span><?= e($item['label']) ?></span>
             </a>

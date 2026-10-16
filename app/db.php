@@ -30,7 +30,8 @@ function db(): PDO
         PDO::ATTR_EMULATE_PREPARES   => false,
         PDO::ATTR_STRINGIFY_FETCHES  => false,
     ]);
-    $pdo->exec("SET time_zone = '+08:00'");
+    $tz = new DateTimeZone((string) config('timezone', 'Asia/Shanghai'));
+    $pdo->exec('SET time_zone = ' . $pdo->quote((new DateTime('now', $tz))->format('P')));
 
     db_migrate($pdo);
 

@@ -12,6 +12,20 @@ ini_set('error_log', BASE_PATH . '/runtime/php-error.log');
 $GLOBALS['config'] = require BASE_PATH . '/app/config.php';
 
 require BASE_PATH . '/app/helpers.php';
+
+// 统一时区（PHP 侧；MySQL 会话时区在 db() 中按同一配置设置）
+date_default_timezone_set((string) config('timezone', 'Asia/Shanghai'));
+
+// 基础安全响应头（在输出之前下发；因存在内联脚本/样式，暂不启用 CSP）
+if (!headers_sent()) {
+    header('X-Content-Type-Options: nosniff');
+    header('X-Frame-Options: SAMEORIGIN');
+    header('Referrer-Policy: same-origin');
+    header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
+    if (($_SERVER['HTTPS'] ?? '') === 'on') {
+        header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+    }
+}
 require BASE_PATH . '/app/icons.php';
 require BASE_PATH . '/app/schema.php';
 require BASE_PATH . '/app/db.php';
@@ -39,7 +53,7 @@ require BASE_PATH . '/app/lib/rules.php';
 // 建立连接并确保表结构就位（首次请求会自动建表）
 db();
 
-// 运行时目录（nginx 已对 /runtime/ 返回 404）
+// 运行时目录（需 Web 服务器拒绝直接访问：nginx 配 location ^~ /runtime/ { deny all; return 404; }）
 foreach ([
     (string) config('session_path'),
     (string) config('storage_path'),

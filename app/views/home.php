@@ -18,14 +18,14 @@ $pct   = min(100, $used / $quota * 100);
 
 <main class="shell">
     <header class="topbar">
-        <a class="brand" href="index.php">
+        <a class="brand" href="<?= e(url('files.list')) ?>">
             <?= lucide('archive', 'brand__mark') ?>
             <span class="brand__name"><?= e($appName) ?></span>
         </a>
 
         <div class="status">
             <span class="status__text"><?= e((string) $user['display_name']) ?></span>
-            <form method="post" action="index.php?r=logout">
+            <form method="post" action="<?= e(url('auth.logout')) ?>">
                 <?= csrf_field() ?>
                 <button class="ghost" data-magnetic type="submit">
                     <?= lucide('log-out', 'ghost__ico') ?>

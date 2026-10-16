@@ -125,8 +125,8 @@ if (!$isTrash) {
     $barTools = '<button class="ghost" type="button" data-upload-trigger>'
         . lucide('cloud-upload', 'ghost__ico') . '<span>上传</span></button>'
         . '<div class="seg" role="group" aria-label="视图切换">'
-        . '<button class="seg__btn' . ($viewMode === 'list' ? ' is-on' : '') . '" type="button" data-view-set="list" aria-label="列表视图">' . lucide('list') . '</button>'
-        . '<button class="seg__btn' . ($viewMode === 'grid' ? ' is-on' : '') . '" type="button" data-view-set="grid" aria-label="网格视图">' . lucide('layout-grid') . '</button>'
+        . '<button class="seg__btn' . ($viewMode === 'list' ? ' is-on' : '') . '" type="button" data-view-set="list" aria-pressed="' . ($viewMode === 'list' ? 'true' : 'false') . '" aria-label="列表视图">' . lucide('list') . '</button>'
+        . '<button class="seg__btn' . ($viewMode === 'grid' ? ' is-on' : '') . '" type="button" data-view-set="grid" aria-pressed="' . ($viewMode === 'grid' ? 'true' : 'false') . '" aria-label="网格视图">' . lucide('layout-grid') . '</button>'
         . '</div>'
         . '<button class="iconbtn" type="button" data-hidden-toggle aria-pressed="' . ($showHidden ? 'true' : 'false')
         . '" aria-label="显示隐藏文件" title="显示隐藏文件">' . lucide($showHidden ? 'eye' : 'eye-off') . '</button>';

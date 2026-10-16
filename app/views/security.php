@@ -43,7 +43,7 @@ if (!defined('BASE_PATH')) {
                     <form method="post" action="<?= e(url('security.private')) ?>">
                         <?= csrf_field() ?>
                         <input type="hidden" name="action" value="set">
-                        <span class="fld__box" style="width:260px">
+                        <span class="fld__box" style="flex:1 1 220px;min-width:0">
                             <span class="fld__ico"><?= lucide('key-round') ?></span>
                             <input class="fld__in" name="password" type="password" required
                                    autocomplete="new-password" placeholder="设置密码（至少 4 位）">
@@ -64,7 +64,7 @@ if (!defined('BASE_PATH')) {
                     <form method="post" action="<?= e(url('security.private')) ?>">
                         <?= csrf_field() ?>
                         <input type="hidden" name="action" value="unlock">
-                        <span class="fld__box" style="width:260px">
+                        <span class="fld__box" style="flex:1 1 220px;min-width:0">
                             <span class="fld__ico"><?= lucide('lock') ?></span>
                             <input class="fld__in" name="password" type="password" required
                                    autocomplete="current-password" placeholder="输入密码">

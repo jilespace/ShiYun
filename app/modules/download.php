@@ -58,6 +58,14 @@ function download_zip(): void
         exit;
     }
 
+    // 私密空间未解锁时不得打包（私密文件不在直链范围内，但打包走本地流式，必须显式拦截）
+    foreach ($nodes as $node) {
+        if (node_in_private($userId, $node) && !Auth::privateUnlocked()) {
+            http_response_code(403);
+            exit('私密空间已锁定');
+        }
+    }
+
     $name = count($nodes) === 1
         ? safe_zip_name((string) $nodes[0]['name']) . '.zip'
         : '拾云打包-' . date('Ymd-His') . '.zip';

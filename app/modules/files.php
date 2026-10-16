@@ -33,6 +33,8 @@ function files_list(): void
         $children = array_map('node_public', node_trash_list($userId));
         $crumbs = [['id' => (int) $folder['id'], 'name' => '回收站']];
         $retention = (int) user_setting($userId, 'trash_retention_days', 30);
+        // 仅在进入回收站时按上限分批清理，避免每次浏览目录都触发大量删除
+        trash_purge_expired($userId, $retention, 200);
     } elseif ($section === 'favorites') {
         $folder = node_require($userId, user_root_id($userId));
         $children = array_map('node_public', node_favorites($userId));
@@ -49,9 +51,6 @@ function files_list(): void
         if (node_in_private($userId, $folder) && !Auth::privateUnlocked()) {
             redirect(url('files.list', ['folder' => user_root_id($userId)]));
         }
-
-        // 回收站里超期的先顺手清掉
-        trash_purge_expired($userId, (int) ($settings['trash_retention_days'] ?? 30));
 
         $children = array_map('node_public', node_children($userId, (int) $folder['id'], $opts));
         $crumbs = node_breadcrumb($userId, (int) $folder['id']);
@@ -437,6 +436,10 @@ function files_info(): void
 {
     $userId = require_auth_api();
     $node = node_require($userId, input_int('id'));
+
+    if (node_in_private($userId, $node) && !Auth::privateUnlocked()) {
+        json_fail('私密空间已锁定。', 403, 'private_locked');
+    }
 
     $meta = node_attach_meta($userId, [$node])[0];
     $info = node_public($meta);

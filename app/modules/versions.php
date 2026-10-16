@@ -15,6 +15,9 @@ function versions_list(): void
     if ($node['kind'] !== 'file') {
         json_fail('只有文件才有版本记录。', 400);
     }
+    if (node_in_private($userId, $node) && !Auth::privateUnlocked()) {
+        json_fail('私密空间已锁定。', 403, 'private_locked');
+    }
 
     $rows = version_rows((int) $node['id']);
     $current = (int) ($node['blob_id'] ?? 0);
@@ -107,11 +110,16 @@ function versions_download(): void
     traffic_add($userId, 'down', (int) $version['size'], 1);
 
     $mime = (string) ($version['mime'] ?? 'application/octet-stream');
-    $inPrivate = node_in_private($userId, [
+    $versionNode = [
         'id'   => (int) $version['node_id'],
         'path' => (string) $version['node_path'],
-    ]);
-    if (!$inPrivate) {
+    ];
+    // 私密空间未解锁时，历史版本与当前内容一样不得读取
+    if (node_in_private($userId, $versionNode) && !Auth::privateUnlocked()) {
+        http_response_code(403);
+        exit('私密空间已锁定');
+    }
+    if (!node_in_private($userId, $versionNode)) {
         blob_deliver($userId, (int) $version['blob_id'], $mime, $name, 0);
     }
     blob_stream((int) $version['blob_id'], $mime, $name, false);

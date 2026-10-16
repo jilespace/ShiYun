@@ -285,7 +285,7 @@
         const dock = tabs.closest('[data-dock]');
         let heightTimer = 0;
 
-        const activate = (name, updateUrl) => {
+        const activate = (name, updateUrl, link) => {
             if (dock) {
                 dock.style.height = '';
                 dock.style.transition = '';
@@ -326,7 +326,7 @@
                 first.focus({ preventScroll: true });
             }
             if (updateUrl) {
-                history.replaceState(null, '', `index.php?r=${name}`);
+                history.replaceState(null, '', link ? link.href : `index.php?r=${name}`);
             }
         };
 
@@ -335,8 +335,12 @@
                 if (!link.dataset.goto) {
                     return;
                 }
+                // 目标 pane 不存在（登录/注册等单 pane 页面）→ 交给浏览器整页导航
+                if (!document.querySelector('[data-pane="' + link.dataset.goto + '"]')) {
+                    return;
+                }
                 event.preventDefault();
-                activate(link.dataset.goto, true);
+                activate(link.dataset.goto, true, link);
             });
         });
 

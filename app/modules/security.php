@@ -73,12 +73,20 @@ function security_private_action(): void
             }
         }
         $new = (string) ($_POST['new_password'] ?? '');
-        if ($new !== '' && mb_strlen($new) < 4) {
+        if ($new === '') {
+            // 首次设置必须提供新密码；已设置时留空表示沿用当前密码
+            if (!$hasPassword) {
+                $errors['form'] = '请设置私密空间密码。';
+            }
+        } elseif (mb_strlen($new) < 4) {
             $errors['form'] = '密码至少 4 位。';
+        } elseif (mb_strlen($new) > 72) {
+            $errors['form'] = '密码最多 72 位。';
         }
         if ($errors === []) {
+            $plain = $new !== '' ? $new : $password;   // 已设置且留空则沿用当前密码
             q_update('users', [
-                'private_hash' => password_hash($new !== '' ? $new : $password, PASSWORD_DEFAULT),
+                'private_hash' => password_hash($plain, PASSWORD_DEFAULT),
             ], 'id = ?', [$userId]);
             Auth::unlockPrivate();
             activity_log($userId, 'private.unlock', null, '设置密码');

@@ -26,6 +26,7 @@ function sources_list(): void
         }
         $row['config'] = $masked;
         $row['driverLabel'] = storage_driver_info()[$row['driver']]['label'] ?? $row['driver'];
+        $row['riskNote'] = source_risk_note($row);
         $row['nodeCount'] = (int) q_val(
             'SELECT COUNT(*) FROM blob_locations WHERE source_id = ?',
             [(int) $row['id']]
@@ -90,7 +91,7 @@ function sources_create(): void
     ]);
 
     activity_log($userId, 'source.add', null, $name);
-    json_ok(['id' => $id]);
+    json_ok(['id' => $id, 'warning' => source_risk_note(['driver' => $driver, 'config' => $clean])]);
 }
 
 function sources_update(): void
@@ -138,7 +139,8 @@ function sources_update(): void
     }
 
     q_update('storage_sources', $patch, 'id = ?', [$source['id']]);
-    json_ok(['updated' => true]);
+    $fresh = q_one('SELECT * FROM storage_sources WHERE id = ?', [(int) $source['id']]);
+    json_ok(['updated' => true, 'warning' => $fresh !== null ? source_risk_note($fresh) : null]);
 }
 
 function sources_delete(): void
@@ -180,7 +182,7 @@ function sources_test(): void
     $result = storage_source_test($source);
     q_update('storage_sources', ['status' => $result['ok'] ? 'ok' : 'error'], 'id = ?', [(int) $source['id']]);
 
-    json_ok($result);
+    json_ok($result + ['warning' => source_risk_note($source)]);
 }
 
 /**

@@ -17,6 +17,12 @@ const OOXML_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const OOXML_S = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const OOXML_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 
+const OOXML_MAX_BYTES  = 20 * 1024 * 1024;   // 单个 Office 文件解析上限
+const OOXML_MAX_PARA   = 4000;               // docx 段落上限
+const OOXML_MAX_ROWS   = 3000;               // xlsx 单表行数上限
+const OOXML_MAX_COLS   = 200;                // xlsx 单表列数上限
+const OOXML_MAX_SLIDES = 200;                // pptx 页数上限
+
 function ooxml_open(string $path): ?ZipArchive
 {
     if (!class_exists('ZipArchive')) {
@@ -34,7 +40,7 @@ function ooxml_xml(ZipArchive $zip, string $entry): ?DOMDocument
     }
     $doc = new DOMDocument();
     $prev = libxml_use_internal_errors(true);
-    $ok = $doc->loadXML($raw, LIBXML_NONET | LIBXML_NOENT);
+    $ok = $doc->loadXML($raw, LIBXML_NONET);
     libxml_clear_errors();
     libxml_use_internal_errors($prev);
     return $ok ? $doc : null;
@@ -57,6 +63,10 @@ function ooxml_docx(string $path): ?string
 
     $html = [];
     foreach ($doc->getElementsByTagNameNS(OOXML_W, 'p') as $p) {
+        if (count($html) >= OOXML_MAX_PARA) {
+            $html[] = '<p class="doc__gap">（内容过多，已截断）</p>';
+            break;
+        }
         $style = '';
         foreach ($p->getElementsByTagNameNS(OOXML_W, 'pStyle') as $s) {
             $style = strtolower((string) $s->getAttributeNS(OOXML_W, 'val'));
@@ -142,6 +152,10 @@ function ooxml_xlsx(string $path): ?string
 
         $rows = [];
         foreach ($sheetDoc->getElementsByTagNameNS(OOXML_S, 'row') as $row) {
+            if (count($rows) >= OOXML_MAX_ROWS) {
+                $rows[] = '<tr><td>（内容过多，已截断）</td></tr>';
+                break;
+            }
             $cells = [];
             foreach ($row->getElementsByTagNameNS(OOXML_S, 'c') as $c) {
                 $ref = (string) $c->getAttribute('r');
@@ -169,7 +183,7 @@ function ooxml_xlsx(string $path): ?string
             if ($cells === []) {
                 continue;
             }
-            $width = max(array_keys($cells)) + 1;
+            $width = min(OOXML_MAX_COLS, max(array_keys($cells)) + 1);
             $rowHtml = [];
             for ($c = 0; $c < $width; $c++) {
                 $val = $cells[$c] ?? '';
@@ -224,6 +238,9 @@ function ooxml_pptx(string $path): ?string
     $html = [];
     $no = 0;
     foreach ($slides as $entry) {
+        if ($no >= OOXML_MAX_SLIDES) {
+            break;
+        }
         $no++;
         $doc = ooxml_xml($zip, $entry);
         if ($doc === null) {
@@ -260,6 +277,11 @@ function ooxml_pptx(string $path): ?string
 /** 按扩展名分派 */
 function ooxml_render(string $path, string $ext): ?string
 {
+    // 体积上限：避免超大文档把内存/CPU 打爆
+    if (!is_file($path) || (int) filesize($path) > OOXML_MAX_BYTES) {
+        return null;
+    }
+
     return match ($ext) {
         'docx' => ooxml_docx($path),
         'xlsx' => ooxml_xlsx($path),

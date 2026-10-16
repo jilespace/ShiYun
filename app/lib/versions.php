@@ -64,7 +64,8 @@ function node_replace_content(int $userId, array $node, array $blob, ?string $mi
         }
     });
 
-    user_add_usage($userId, (int) $blob['size'] - $oldSize);
+    // 以重算为准：新内容计入节点、旧内容转为版本，二者都应占用配额
+    user_recompute_usage($userId);
 
     return node_require($userId, (int) $node['id']);
 }
@@ -117,6 +118,7 @@ function version_delete(int $userId, int $versionId): bool
 
     q_exec('DELETE FROM node_versions WHERE id = ?', [$versionId]);
     blob_release((int) $version['blob_id']);
+    user_recompute_usage($userId);
 
     return true;
 }
@@ -133,6 +135,9 @@ function versions_prune(int $userId, int $nodeId, int $keep = 10): int
     foreach ($rows as $row) {
         q_exec('DELETE FROM node_versions WHERE id = ?', [(int) $row['id']]);
         blob_release((int) $row['blob_id']);
+    }
+    if ($rows !== []) {
+        user_recompute_usage($userId);
     }
 
     return count($rows);

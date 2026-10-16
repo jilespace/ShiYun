@@ -122,13 +122,25 @@ function webdav_auth(): ?array
         }
     }
 
+    // 与 Web 登录共用失败计数/锁定，避免 Basic Auth 被无限暴力破解
+    if (login_locked($login, client_ip())) {
+        header('WWW-Authenticate: Basic realm="拾云 WebDAV"');
+        http_response_code(429);
+        header('Content-Type: text/plain; charset=utf-8');
+        exit("尝试次数过多，请稍后再试。\n");
+    }
+
     $user = find_user_by_login($login);
     if ($user === null || $user['status'] !== 'active') {
+        log_login(null, $login, 'fail', 'WebDAV 账号不存在或已停用');
         return null;
     }
     if (!password_verify($secret, (string) $user['password_hash'])) {
+        log_login((int) $user['id'], $login, 'fail', 'WebDAV 密码错误');
         return null;
     }
+
+    log_login((int) $user['id'], $login, 'success', 'WebDAV');
 
     return $user;
 }

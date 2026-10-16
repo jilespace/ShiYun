@@ -206,14 +206,9 @@ function storage_series(int $userId, int $days = 30): array
     return $series;
 }
 
-/** 按类型分布统计 */
+/** 按类型分布统计（单条 SQL 聚合，避免把全部节点载入内存） */
 function type_distribution(int $userId): array
 {
-    $rows = q_all(
-        'SELECT ext, mime, size, name FROM nodes WHERE user_id = ? AND kind = ?',
-        [$userId, 'file']
-    );
-
     $buckets = [
         'image' => ['label' => '图片', 'bytes' => 0, 'count' => 0],
         'video' => ['label' => '视频', 'bytes' => 0, 'count' => 0],
@@ -224,10 +219,30 @@ function type_distribution(int $userId): array
         'other' => ['label' => '其他', 'bytes' => 0, 'count' => 0],
     ];
 
+    // CASE 分支顺序与取值必须与 kind_of() 保持一致
+    $rows = q_all(
+        "SELECT CASE
+                   WHEN mime LIKE 'image/%' THEN 'image'
+                   WHEN mime LIKE 'video/%' THEN 'video'
+                   WHEN mime LIKE 'audio/%' THEN 'audio'
+                   WHEN ext IN ('zip','rar','7z','tar','gz','bz2','xz','tgz') THEN 'archive'
+                   WHEN ext IN ('js','mjs','ts','php','py','java','c','h','cpp','go','rs','rb','sh','sql','css','html','htm','json','yml','yaml','xml') THEN 'code'
+                   WHEN ext IN ('doc','docx','xls','xlsx','ppt','pptx','pdf','txt','md','markdown','csv','tsv','odt','epub') THEN 'document'
+                   ELSE 'other'
+                 END AS bucket,
+                 COUNT(*) AS cnt,
+                 COALESCE(SUM(size), 0) AS bytes
+         FROM nodes WHERE user_id = ? AND kind = 'file'
+         GROUP BY bucket",
+        [$userId]
+    );
+
     foreach ($rows as $row) {
-        $kind = kind_of((string) $row['mime'], (string) $row['ext']);
-        $buckets[$kind]['bytes'] += (int) $row['size'];
-        $buckets[$kind]['count']++;
+        $b = (string) $row['bucket'];
+        if (isset($buckets[$b])) {
+            $buckets[$b]['count'] = (int) $row['cnt'];
+            $buckets[$b]['bytes'] = (int) $row['bytes'];
+        }
     }
 
     return $buckets;

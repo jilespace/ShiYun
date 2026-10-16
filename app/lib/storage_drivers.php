@@ -57,6 +57,102 @@ function storage_driver_available(string $driver): bool
     return isset($info[$driver]) && $info[$driver]['available'];
 }
 
+/** IP → 无符号整型（用于私网区间比较） */
+function ip_to_uint(string $ip): int
+{
+    $long = ip2long($ip);
+    return $long === false ? -1 : (int) sprintf('%u', $long);
+}
+
+/**
+ * 高危地址告警（非阻塞）：命中回环/私网/链路本地/云元数据时返回警示文案，否则 null。
+ * 仅做字符串与 IP 判断，不做 DNS 解析，避免额外网络往返与阻塞。
+ */
+function host_risk_note(string $host): ?string
+{
+    $host = strtolower(trim($host));
+    if ($host === '') {
+        return null;
+    }
+    $host = trim($host, '[]');
+    // 仅对非 IPv6 的 "主机:端口" 去端口；否则会把 ::1 / fe80::1 这类地址截断为空
+    if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false && str_contains($host, ':')) {
+        $host = explode(':', $host)[0];
+    }
+    if ($host === '') {
+        return null;
+    }
+
+    $note = '该地址指向内网 / 本机，若作为公网服务请确认安全风险。';
+
+    if ($host === 'localhost' || $host === 'metadata.google.internal'
+        || str_ends_with($host, '.internal') || str_ends_with($host, '.local')) {
+        return $note;
+    }
+
+    if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+        $u = ip_to_uint($host);
+        if ($u < 0) {
+            return null;
+        }
+        foreach ([
+            ['127.0.0.0', '127.255.255.255'],    // 回环
+            ['10.0.0.0', '10.255.255.255'],
+            ['172.16.0.0', '172.31.255.255'],
+            ['192.168.0.0', '192.168.255.255'],
+            ['169.254.0.0', '169.254.255.255'],  // 链路本地 / 云元数据
+            ['100.64.0.0', '100.127.255.255'],   // CGNAT
+            ['0.0.0.0', '0.255.255.255'],
+        ] as [$from, $to]) {
+            if ($u >= ip_to_uint($from) && $u <= ip_to_uint($to)) {
+                return $note;
+            }
+        }
+        return null;
+    }
+
+    if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
+        if ($host === '::1' || str_starts_with($host, 'fc') || str_starts_with($host, 'fd')
+            || str_starts_with($host, 'fe80')) {
+            return $note;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * 存储源风险告警（非阻塞）。无风险返回 null。
+ * s3 取 endpoint 的 host；ftp/sftp 取 host；local 检查 root 是否落在站点目录之外。
+ */
+function source_risk_note(array $source): ?string
+{
+    $driver = (string) ($source['driver'] ?? '');
+    $config = is_string($source['config'] ?? null)
+        ? (json_decode((string) $source['config'], true) ?: [])
+        : (array) ($source['config'] ?? []);
+
+    if ($driver === 's3') {
+        return host_risk_note((string) (parse_url((string) ($config['endpoint'] ?? ''), PHP_URL_HOST) ?: ''));
+    }
+    if (in_array($driver, ['ftp', 'sftp'], true)) {
+        return host_risk_note((string) ($config['host'] ?? ''));
+    }
+    if ($driver === 'local') {
+        $root = (string) ($config['root'] ?? '');
+        if ($root === '') {
+            return null;
+        }
+        $real = realpath($root);
+        $base = realpath(BASE_PATH);
+        if ($real !== false && $base !== false && !str_starts_with($real, $base)) {
+            return '本地存储目录位于站点目录之外，请确认已正确限制其访问权限。';
+        }
+    }
+
+    return null;
+}
+
 /* ------------------------------------------------------------ 连通性测试 */
 
 /** @return array{ok:bool,message:string} */
@@ -331,14 +427,28 @@ function s3_request(array $c, string $method, string $key, array $opts = []): ar
     if (isset($opts['body'])) {
         curl_setopt($ch, CURLOPT_POSTFIELDS, (string) $opts['body']);
     }
+    $inFh = null;
+    $outFh = null;
     if (isset($opts['file'])) {
-        curl_setopt($ch, CURLOPT_INFILE, fopen((string) $opts['file'], 'rb'));
+        $inFh = fopen((string) $opts['file'], 'rb');
+        if ($inFh === false) {
+            curl_close($ch);
+            return ['status' => 0, 'body' => '无法读取本地文件', 'headers' => ''];
+        }
+        curl_setopt($ch, CURLOPT_INFILE, $inFh);
         curl_setopt($ch, CURLOPT_INFILESIZE, (int) filesize((string) $opts['file']));
         curl_setopt($ch, CURLOPT_UPLOAD, true);
     }
     if (!empty($opts['download'])) {
-        $fh = fopen((string) $opts['download'], 'wb');
-        curl_setopt($ch, CURLOPT_FILE, $fh);
+        $outFh = fopen((string) $opts['download'], 'wb');
+        if ($outFh === false) {
+            if (is_resource($inFh)) {
+                fclose($inFh);
+            }
+            curl_close($ch);
+            return ['status' => 0, 'body' => '无法写入本地文件', 'headers' => ''];
+        }
+        curl_setopt($ch, CURLOPT_FILE, $outFh);
         curl_setopt($ch, CURLOPT_HEADER, false);
     }
 
@@ -347,6 +457,14 @@ function s3_request(array $c, string $method, string $key, array $opts = []): ar
     $headerSize = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
     $error = curl_error($ch);
     curl_close($ch);
+
+    // cURL 不会关闭通过 CURLOPT_INFILE / CURLOPT_FILE 传入的流，这里显式释放，避免句柄泄漏
+    if (is_resource($inFh)) {
+        fclose($inFh);
+    }
+    if (is_resource($outFh)) {
+        fclose($outFh);
+    }
 
     if ($response === false) {
         return ['status' => 0, 'body' => $error, 'headers' => ''];

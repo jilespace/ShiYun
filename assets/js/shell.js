@@ -38,7 +38,17 @@
             init.body = JSON.stringify(payload || {});
         }
 
-        const res = await fetch(url, init);
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), options.timeout || 30000);
+        init.signal = controller.signal;
+        let res;
+        try {
+            res = await fetch(url, init);
+        } catch (e) {
+            throw new Error(e && e.name === 'AbortError' ? '请求超时，请重试。' : '网络异常，请检查连接。');
+        } finally {
+            window.clearTimeout(timer);
+        }
         let body = null;
         try {
             body = await res.json();
@@ -120,18 +130,30 @@
     const modalBody = $('[data-modal-body]');
     const modalFoot = $('[data-modal-foot]');
     let onClose = null;
+    let lastFocus = null;
+
+    function modalFocusables() {
+        if (!modal) return [];
+        return Array.from(modal.querySelectorAll(
+            'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )).filter((el) => el.offsetParent !== null);
+    }
 
     function openModal(title, bodyHtml, footHtml, closeFn) {
         if (!modal) return;
+        lastFocus = document.activeElement;
         modalTitle.textContent = title;
         modalBody.innerHTML = bodyHtml;
         modalFoot.innerHTML = footHtml || '';
         modal.hidden = false;
         onClose = closeFn || null;
 
-        const focusable = modalBody.querySelector('input, textarea, select, button');
-        if (focusable) {
-            setTimeout(() => focusable.focus(), 30);
+        // 优先聚焦主操作按钮，其次首个可聚焦元素（含底部按钮）
+        const target = modalBody.querySelector('input, textarea, select, button')
+            || modalFoot.querySelector('[data-x="yes"]')
+            || modalFocusables()[0];
+        if (target) {
+            setTimeout(() => target.focus(), 30);
         }
     }
 
@@ -143,12 +165,38 @@
         const fn = onClose;
         onClose = null;
         if (fn) fn();
+        // 关闭后把焦点还给触发元素
+        if (lastFocus && lastFocus.isConnected) {
+            lastFocus.focus();
+        }
+        lastFocus = null;
     }
 
     SY.openModal = openModal;
     SY.closeModal = closeModal;
 
     $$('[data-modal-close]').forEach((el) => el.addEventListener('click', closeModal));
+
+    // Tab 焦点陷阱：在弹窗内循环，避免穿透到背景
+    if (modal) {
+        modal.addEventListener('keydown', (e) => {
+            if (e.key !== 'Tab') return;
+            const list = modalFocusables();
+            if (list.length === 0) {
+                e.preventDefault();
+                return;
+            }
+            const first = list[0];
+            const last = list[list.length - 1];
+            if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+            }
+        });
+    }
 
     /** 确认框，返回 Promise<boolean> */
     function confirmDialog(title, message, confirmLabel, danger) {
