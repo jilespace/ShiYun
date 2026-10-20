@@ -238,7 +238,7 @@ function blob_push_to_source(int $blobId, int $sourceId): array
  * HEAD 失败即把 location 标为 stale，之后直接跳过——否则 COS 挂掉时每次下载
  * 都要白等一次超时。
  */
-function blob_direct_url(int $userId, int $blobId, string $mime, string $filename): ?string
+function blob_direct_url(int $userId, int $blobId, string $mime, string $filename, string $disposition = 'attachment'): ?string
 {
     $loc = blob_location_direct($userId, $blobId);
     if ($loc === null) {
@@ -267,7 +267,7 @@ function blob_direct_url(int $userId, int $blobId, string $mime, string $filenam
         (int) config('presign_ttl', 7200),
         [
             'response-content-disposition' =>
-                'attachment; filename="' . $filename . '"; filename*=UTF-8\'\'' . rawurlencode($filename),
+                $disposition . '; filename="' . $filename . '"; filename*=UTF-8\'\'' . rawurlencode($filename),
             'response-content-type' => $mime,
         ]
     );
@@ -277,9 +277,9 @@ function blob_direct_url(int $userId, int $blobId, string $mime, string $filenam
  * 下载分发：命中可用直链则 302 到 COS，否则回退本地流式。
  * 调用方需自行完成鉴权与计数。
  */
-function blob_deliver(int $userId, int $blobId, string $mime, string $filename, int $speedLimitKB = 0): never
+function blob_deliver(int $userId, int $blobId, string $mime, string $filename, int $speedLimitKB = 0, string $disposition = 'attachment'): never
 {
-    $url = blob_direct_url($userId, $blobId, $mime, $filename);
+    $url = blob_direct_url($userId, $blobId, $mime, $filename, $disposition);
     if ($url !== null) {
         if (!headers_sent()) {
             header('Cache-Control: private, max-age=0, must-revalidate');
@@ -288,7 +288,7 @@ function blob_deliver(int $userId, int $blobId, string $mime, string $filename, 
         exit;
     }
 
-    blob_stream($blobId, $mime, $filename, false, $speedLimitKB);
+    blob_stream($blobId, $mime, $filename, $disposition === 'inline', $speedLimitKB);
 }
 
 /* -------------------------------------------------------------- 输出路径 */

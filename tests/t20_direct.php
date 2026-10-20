@@ -56,4 +56,30 @@ check($headPos !== false && $headPos > $dispPos,
     'HEAD 短路必须写在 header 块之后（否则会漏掉 Content-Length）'
 );
 
+// ------------------------------------------- blob_direct_url 的 disposition
+
+$tmpT3 = sys_get_temp_dir() . '/t15-t3.bin';
+file_put_contents($tmpT3, 'inline-me');
+$blobT3 = blob_ingest_file($tmpT3, null, 'text/plain');
+$blobT3Id = (int) $blobT3['blob_id'];
+$userT3 = (int) q_val('SELECT id FROM users ORDER BY id LIMIT 1');
+
+// 无可用的对象存储副本 → 两个 disposition 都返回 null（回退本地）
+check(blob_direct_url($userT3, $blobT3Id, 'text/plain', 'a.txt', 'inline') === null,
+    '无副本时 inline 请求也应回退');
+check(blob_direct_url($userT3, $blobT3Id, 'text/plain', 'a.txt') === null,
+    '默认参数应保持既有行为（attachment）');
+
+$ref = new ReflectionFunction('blob_direct_url');
+check($ref->getParameters()[4]->getName() === 'disposition',
+    'blob_direct_url 第 5 个参数应为 disposition');
+check($ref->getParameters()[4]->getDefaultValue() === 'attachment',
+    'blob_direct_url 的 disposition 默认值应为 attachment');
+
+$refD = new ReflectionFunction('blob_deliver');
+check($refD->getParameters()[5]->getName() === 'disposition',
+    'blob_deliver 第 6 个参数应为 disposition');
+check($refD->getParameters()[5]->getDefaultValue() === 'attachment',
+    'blob_deliver 的 disposition 默认值应为 attachment');
+
 finish();
