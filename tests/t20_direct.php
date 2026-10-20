@@ -93,4 +93,44 @@ check(str_contains($storage, '$disposition === \'inline\''),
 check(str_contains($storage, 'mime_inline_ok($mime) ? $disposition : '),
     'blob_direct_url 应对非白名单类型强制降级为 attachment');
 
+// ------------------------------------------------------------ direct_links 表
+
+db();
+
+check((bool) q_val("SHOW TABLES LIKE 'direct_links'"), 'direct_links 表应已创建');
+
+$colsT4 = array_column(q_all('SHOW COLUMNS FROM direct_links'), 'Field');
+foreach (['user_id', 'node_id', 'token', 'ip_allow', 'expires_at',
+          'status', 'hit_count', 'last_access_at', 'created_at'] as $c) {
+    check(in_array($c, $colsT4, true), "direct_links 应有列 {$c}");
+}
+
+$statusTypeT4 = '';
+foreach (q_all('SHOW COLUMNS FROM direct_links') as $row) {
+    if ($row['Field'] === 'status') {
+        $statusTypeT4 = (string) $row['Type'];
+    }
+}
+check(str_contains($statusTypeT4, 'active') && str_contains($statusTypeT4, 'revoked'),
+    'status 枚举应为 active / revoked');
+
+$tokTypeT4 = '';
+foreach (q_all('SHOW COLUMNS FROM direct_links') as $row) {
+    if ($row['Field'] === 'token') {
+        $tokTypeT4 = (string) $row['Type'];
+    }
+}
+check(str_contains($tokTypeT4, 'char(32)'), 'token 应为 CHAR(32)');
+
+$idxT4 = array_column(q_all('SHOW INDEX FROM direct_links'), 'Key_name');
+check(in_array('uk_direct_token', $idxT4, true), 'token 应有唯一索引');
+
+// ip_allow 与 expires_at 必须可空（不限来源 / 永久有效）
+$nullsT4 = [];
+foreach (q_all('SHOW COLUMNS FROM direct_links') as $row) {
+    $nullsT4[$row['Field']] = (string) $row['Null'];
+}
+check($nullsT4['ip_allow'] === 'YES', 'ip_allow 应可空');
+check($nullsT4['expires_at'] === 'YES', 'expires_at 应可空');
+
 finish();

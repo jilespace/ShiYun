@@ -10,7 +10,7 @@ if (!defined('BASE_PATH')) {
 /**
  * 数据库结构定义。改结构时把 SCHEMA_VERSION 加一，下次请求会自动补建。
  */
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 /** @return list<string> */
 function schema_statements(): array
@@ -425,6 +425,25 @@ function schema_statements(): array
             created_at   DATETIME        NOT NULL,
             PRIMARY KEY (id),
             KEY idx_rule_user (user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL;
+
+    $sql[] = <<<SQL
+        CREATE TABLE IF NOT EXISTS direct_links (
+            id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id        BIGINT UNSIGNED NOT NULL,
+            node_id        BIGINT UNSIGNED NOT NULL,
+            token          CHAR(32)        NOT NULL,
+            ip_allow       VARCHAR(64)     NULL,
+            expires_at     DATETIME        NULL,
+            status         ENUM('active','revoked') NOT NULL DEFAULT 'active',
+            hit_count      BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            last_access_at DATETIME        NULL,
+            created_at     DATETIME        NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY uk_direct_token (token),
+            KEY idx_direct_user (user_id, created_at),
+            KEY idx_direct_node (node_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL;
 
