@@ -827,7 +827,7 @@ $otherT6 = q_insert('users', [
 $tmpT6 = sys_get_temp_dir() . '/t15-t6.txt';
 file_put_contents($tmpT6, 'hello direct');
 $blobT6 = blob_ingest_file($tmpT6, null, 'text/plain');
-$nodeT6 = node_create_file($uidT6, 0, 't15-direct.txt', $blobT6, 'text/plain');
+$nodeT6 = node_create_file($uidT6, user_root_id($uidT6), 't15-direct.txt', $blobT6, 'text/plain');
 $nodeT6Id = (int) $nodeT6['id'];
 
 /** 造一条直链，返回 [token, id] */
@@ -885,7 +885,7 @@ check($r['ok'] === true, 'IP 匹配 → ok');
 $tmpT6b = sys_get_temp_dir() . '/t15-t6b.txt';
 file_put_contents($tmpT6b, 'trash me');
 $blobT6b = blob_ingest_file($tmpT6b, null, 'text/plain');
-$nodeT6b = node_create_file($uidT6, 0, 't15-trash.txt', $blobT6b, 'text/plain');
+$nodeT6b = node_create_file($uidT6, user_root_id($uidT6), 't15-trash.txt', $blobT6b, 'text/plain');
 [$tkTrash] = $mkLink(['node_id' => (int) $nodeT6b['id']]);
 q_update('nodes', ['deleted_at' => now()], 'id = ?', [(int) $nodeT6b['id']]);
 $r = direct_resolve($tkTrash, '203.0.113.1');
@@ -897,7 +897,7 @@ $r = direct_resolve($tkTrash, '203.0.113.1');
 check($r['ok'] === true, '恢复后原令牌应复活');
 
 // 9. 文件夹 → 404
-$folderT6 = node_create_folder($uidT6, 0, 't15-folder');
+$folderT6 = node_create_folder($uidT6, user_root_id($uidT6), 't15-folder');
 [$tkFolder] = $mkLink(['node_id' => (int) $folderT6['id']]);
 $r = direct_resolve($tkFolder, '203.0.113.1');
 check($r['ok'] === false && $r['code'] === 404, '节点是文件夹 → 404');
@@ -906,9 +906,11 @@ check($r['ok'] === false && $r['code'] === 404, '节点是文件夹 → 404');
 $tmpT6c = sys_get_temp_dir() . '/t15-t6c.txt';
 file_put_contents($tmpT6c, 'private');
 $blobT6c = blob_ingest_file($tmpT6c, null, 'text/plain');
-$nodeT6c = node_create_file($uidT6, 0, 't15-private.txt', $blobT6c, 'text/plain');
-// node_set_flags() 的白名单里没有 is_private，直接改列
-q_update('nodes', ['is_private' => 1], 'id = ?', [(int) $nodeT6c['id']]);
+// 私密空间是按路径判定的——node_in_private() 看 path 是否落在私密根下，
+// is_private 列只是这个判定的派生缓存。所以节点必须建在私密根里；
+// 直接翻转 is_private 列会造出「列说是、路径说不是」的矛盾状态，
+// 而 direct_resolve() 走的是路径判定，测试会假挂。
+$nodeT6c = node_create_file($uidT6, user_private_id($uidT6), 't15-private.txt', $blobT6c, 'text/plain');
 [$tkPriv] = $mkLink(['node_id' => (int) $nodeT6c['id']]);
 $r = direct_resolve($tkPriv, '203.0.113.1');
 check($r['ok'] === false && $r['code'] === 403, '私密空间 → 403');
@@ -1247,7 +1249,7 @@ $uidT8 = (int) q_val('SELECT id FROM users ORDER BY id LIMIT 1');
 $tmpT8 = sys_get_temp_dir() . '/t15-t8.txt';
 file_put_contents($tmpT8, 'badge');
 $blobT8 = blob_ingest_file($tmpT8, null, 'text/plain');
-$nodeT8 = node_create_file($uidT8, 0, 't15-badge.txt', $blobT8, 'text/plain');
+$nodeT8 = node_create_file($uidT8, user_root_id($uidT8), 't15-badge.txt', $blobT8, 'text/plain');
 $nodeT8Id = (int) $nodeT8['id'];
 
 $pub = node_public(node_get($uidT8, $nodeT8Id));
@@ -1265,7 +1267,7 @@ q_insert('direct_links', [
     'hit_count' => 0, 'created_at' => now(),
 ]);
 
-$children = node_children($uidT8, 0, ['sort' => 'name', 'dir' => 'asc', 'showHidden' => true]);
+$children = node_children($uidT8, user_root_id($uidT8), ['sort' => 'name', 'dir' => 'asc', 'showHidden' => true]);
 $badgeCount = null;
 foreach ($children as $c) {
     if ((int) $c['id'] === $nodeT8Id) {
