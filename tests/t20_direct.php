@@ -196,4 +196,123 @@ check(direct_find(strtoupper($tk)) === null,
     '大写令牌返回 null——random_token 只产小写，校验正则也拒绝大写');
 check(direct_find(str_repeat('a', 32)) === null, '未入库的令牌应返回 null');
 
+// -------------------------------------------------------- direct_resolve
+
+$uidT6 = (int) q_val('SELECT id FROM users ORDER BY id LIMIT 1');
+// 本块会被反复执行（RED → GREEN → 复审复跑），而 users.email 与同目录下的文件夹名
+// 都是唯一的：先清掉上一轮的测试用户与同名文件夹，否则第二次运行会撞唯一键。
+// 文件节点不必清理——node_create_file() 遇到同名会自动改名。
+q_exec('DELETE FROM users WHERE email = ?', ['t15other@example.test']);
+q_exec('DELETE FROM nodes WHERE user_id = ? AND name = ?', [$uidT6, 't15-folder']);
+$otherT6 = q_insert('users', [
+    'email' => 't15other@example.test', 'username' => 't15other',
+    'display_name' => 't15other', 'password_hash' => password_hash('x', PASSWORD_DEFAULT),
+    'quota_bytes' => 1024 ** 3, 'used_bytes' => 0, 'created_at' => now(), 'updated_at' => now(),
+]);
+
+$tmpT6 = sys_get_temp_dir() . '/t15-t6.txt';
+file_put_contents($tmpT6, 'hello direct');
+$blobT6 = blob_ingest_file($tmpT6, null, 'text/plain');
+$nodeT6 = node_create_file($uidT6, user_root_id($uidT6), 't15-direct.txt', $blobT6, 'text/plain');
+$nodeT6Id = (int) $nodeT6['id'];
+
+/** 造一条直链，返回 [token, id] */
+$mkLink = static function (array $over = []) use ($uidT6, $nodeT6Id): array {
+    $token = direct_token();
+    $id = q_insert('direct_links', $over + [
+        'user_id'    => $uidT6,
+        'node_id'    => $nodeT6Id,
+        'token'      => $token,
+        'ip_allow'   => null,
+        'expires_at' => null,
+        'status'     => 'active',
+        'hit_count'  => 0,
+        'created_at' => now(),
+    ]);
+    return [$token, (int) $id];
+};
+
+// 1. token 格式非法
+$r = direct_resolve('nope', '203.0.113.1');
+check($r['ok'] === false && $r['code'] === 404, '格式非法 → 404');
+
+// 2. 未入库
+$r = direct_resolve(str_repeat('a', 32), '203.0.113.1');
+check($r['ok'] === false && $r['code'] === 404, '未入库 → 404');
+
+// 3. 已撤销
+[$tkRev, $idRev] = $mkLink(['status' => 'revoked']);
+$r = direct_resolve($tkRev, '203.0.113.1');
+check($r['ok'] === false && $r['code'] === 410, '已撤销 → 410');
+
+// 4. 已过期
+[$tkExp] = $mkLink(['expires_at' => date('Y-m-d H:i:s', time() - 60)]);
+$r = direct_resolve($tkExp, '203.0.113.1');
+check($r['ok'] === false && $r['code'] === 410, '已过期 → 410');
+
+// 5. IP 不匹配
+[$tkIp] = $mkLink(['ip_allow' => '198.51.100.0/24']);
+$r = direct_resolve($tkIp, '203.0.113.1');
+check($r['ok'] === false && $r['code'] === 403, 'IP 不匹配 → 403');
+
+// 6. 全部通过
+[$tkOk] = $mkLink();
+$r = direct_resolve($tkOk, '203.0.113.1');
+check($r['ok'] === true && $r['code'] === 200, '全部通过 → ok');
+check((int) ($r['row']['id'] ?? 0) > 0, '通过时 row 应已填好');
+check((int) ($r['node']['id'] ?? 0) === $nodeT6Id, '通过时 node 应已填好');
+
+// IP 匹配时同样通过
+[$tkIpOk] = $mkLink(['ip_allow' => '203.0.113.0/24']);
+$r = direct_resolve($tkIpOk, '203.0.113.55');
+check($r['ok'] === true, 'IP 匹配 → ok');
+
+// 7. 节点进回收站 → 410
+$tmpT6b = sys_get_temp_dir() . '/t15-t6b.txt';
+file_put_contents($tmpT6b, 'trash me');
+$blobT6b = blob_ingest_file($tmpT6b, null, 'text/plain');
+$nodeT6b = node_create_file($uidT6, user_root_id($uidT6), 't15-trash.txt', $blobT6b, 'text/plain');
+[$tkTrash] = $mkLink(['node_id' => (int) $nodeT6b['id']]);
+q_update('nodes', ['deleted_at' => now()], 'id = ?', [(int) $nodeT6b['id']]);
+$r = direct_resolve($tkTrash, '203.0.113.1');
+check($r['ok'] === false && $r['code'] === 410, '节点在回收站 → 410');
+
+// 8. 恢复后原令牌复活（令牌未变）
+q_update('nodes', ['deleted_at' => null], 'id = ?', [(int) $nodeT6b['id']]);
+$r = direct_resolve($tkTrash, '203.0.113.1');
+check($r['ok'] === true, '恢复后原令牌应复活');
+
+// 9. 文件夹 → 404
+$folderT6 = node_create_folder($uidT6, user_root_id($uidT6), 't15-folder');
+[$tkFolder] = $mkLink(['node_id' => (int) $folderT6['id']]);
+$r = direct_resolve($tkFolder, '203.0.113.1');
+check($r['ok'] === false && $r['code'] === 404, '节点是文件夹 → 404');
+
+// 10. 私密空间 → 403
+$tmpT6c = sys_get_temp_dir() . '/t15-t6c.txt';
+file_put_contents($tmpT6c, 'private');
+$blobT6c = blob_ingest_file($tmpT6c, null, 'text/plain');
+// 私密空间是按路径判定的——node_in_private() 看 path 是否落在私密根下，
+// is_private 列只是这个判定的派生缓存。所以节点必须建在私密根里；
+// 直接翻转 is_private 列会造出「列说是、路径说不是」的矛盾状态，
+// 而 direct_resolve() 走的是路径判定，测试会假挂。
+$nodeT6c = node_create_file($uidT6, user_private_id($uidT6), 't15-private.txt', $blobT6c, 'text/plain');
+[$tkPriv] = $mkLink(['node_id' => (int) $nodeT6c['id']]);
+$r = direct_resolve($tkPriv, '203.0.113.1');
+check($r['ok'] === false && $r['code'] === 403, '私密空间 → 403');
+
+// 11. 跨用户隔离：别人的令牌取不到我的文件
+[$tkCross] = $mkLink();
+q_update('direct_links', ['user_id' => $otherT6], 'token = ?', [$tkCross]);
+$r = direct_resolve($tkCross, '203.0.113.1');
+check($r['ok'] === false, 'user_id 被改到别人名下后不应再放行');
+
+// 12. 同一文件多条直链互不影响
+//     上面 $mkLink() 默认都建在 $nodeT6Id 上，此刻该节点已有若干条
+$linkCountT6 = (int) q_val('SELECT COUNT(*) FROM direct_links WHERE node_id = ?', [$nodeT6Id]);
+check($linkCountT6 >= 3, '同一文件应能挂多条直链');
+// 其中 $tkRev 已撤销，$tkOk 仍生效——撤销一条不影响另一条
+check(direct_resolve($tkRev, '203.0.113.1')['ok'] === false, '被撤销的那条仍应拒绝');
+check(direct_resolve($tkOk, '203.0.113.1')['ok'] === true, '未被撤销的那条不受影响');
+
 finish();

@@ -120,6 +120,49 @@ function direct_find(string $token): ?array
     return q_one('SELECT * FROM direct_links WHERE token = ? LIMIT 1', [$token]);
 }
 
+/**
+ * 汇总直链的准入判定。
+ *
+ * ok 为真时 code 为 200，row / node 已填好；
+ * 为假时 message 是要直接吐给调用方的纯文本。
+ */
+function direct_resolve(string $token, string $ip): array
+{
+    $deny = static fn (int $code, string $message): array => [
+        'ok' => false, 'code' => $code, 'message' => $message,
+        'row' => null, 'node' => null,
+    ];
+
+    $row = direct_find($token);
+    if ($row === null) {
+        return $deny(404, '链接不存在');
+    }
+    if (($row['status'] ?? '') !== 'active') {
+        return $deny(410, '链接已被撤销');
+    }
+    if (!direct_is_live($row)) {
+        return $deny(410, '链接已过期');
+    }
+    if (!direct_ip_ok($row, $ip)) {
+        return $deny(403, '来源不被允许');
+    }
+
+    $ownerId = (int) $row['user_id'];
+    $node = node_get($ownerId, (int) $row['node_id']);
+    if ($node === null || $node['deleted_at'] !== null) {
+        return $deny(410, '文件已不在');
+    }
+    // 建链之后文件才被移入私密空间的情况
+    if (node_in_private($ownerId, $node)) {
+        return $deny(403, '文件不可访问');
+    }
+    if ($node['kind'] !== 'file' || $node['blob_id'] === null) {
+        return $deny(404, '链接不存在');
+    }
+
+    return ['ok' => true, 'code' => 200, 'message' => '', 'row' => $row, 'node' => $node];
+}
+
 /** 直链信息的对外形状 */
 function direct_public(array $row): array
 {
