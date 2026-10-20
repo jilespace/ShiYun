@@ -29,6 +29,28 @@ function url(string $route = '', array $params = []): string
 }
 
 /**
+ * 把站内相对链接补成绝对地址。
+ *
+ * 二维码、直链这类要被带到本站之外使用的东西必须是绝对地址——相对路径
+ * 在别人的网页、别的服务里没有意义。
+ *
+ * 默认按当前请求的协议与 Host 推导。站点跑在终止 TLS 的隧道或反向代理
+ * 后面时，本机看到的是 http 而公网是 https，此时用 config.base_url 显式
+ * 指定公网前缀——比采信 X-Forwarded-Proto 稳，那个头谁都能伪造。
+ */
+function absolute_url(string $route = '', array $params = []): string
+{
+    $base = trim((string) config('base_url', ''));
+    if ($base !== '') {
+        return rtrim($base, '/') . '/' . url($route, $params);
+    }
+
+    $https = (($_SERVER['HTTPS'] ?? '') === 'on') ? 'https' : 'http';
+    $host = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
+    return $https . '://' . $host . '/' . url($route, $params);
+}
+
+/**
  * 静态资源 URL：按文件修改时间附带版本号。
  *
  * 不能拿固定的 app 版本号当 ?v= —— 文件改了而版本号没改，浏览器会按

@@ -429,6 +429,28 @@ $directItem = strpos($jsT10, "['direct', 'plug', '直链']");
 check($fileBlock !== false && $directItem > $fileBlock,
     '「直链」菜单项应落在 node.kind === \'file\' 的分支内');
 
+// --------------------------------------------------------- 直链须为绝对地址
+
+// 直链是要贴到别的服务、别人的网页里去的，相对路径出了本站就没有意义。
+// 回归点：曾经直接用 url()，界面里显示成「index.php?r=direct.serve&t=…」。
+$pubLink = direct_public([
+    'id' => 1, 'token' => str_repeat('a', 32), 'ip_allow' => null,
+    'expires_at' => null, 'hit_count' => 0, 'last_access_at' => null,
+    'created_at' => now(),
+]);
+check(str_starts_with((string) $pubLink['url'], 'http'), '直链应为绝对地址');
+check(str_starts_with((string) $pubLink['urlDownload'], 'http'), '下载直链应为绝对地址');
+check(str_contains((string) $pubLink['urlDownload'], 'dl=1'), '下载直链应带 dl=1');
+
+// base_url 优先于按请求推导：隧道/反代终止 TLS 时本机看到的是 http，
+// 而公网是 https，必须能显式指定，否则生成的链接协议是错的。
+$savedBase = $GLOBALS['config']['base_url'] ?? null;
+$GLOBALS['config']['base_url'] = 'https://pan.example.test/';
+$abs = absolute_url('direct.serve', ['t' => 'x']);
+check(str_starts_with($abs, 'https://pan.example.test/index.php'), 'base_url 应优先于请求推导');
+check(!str_contains($abs, '.test//'), 'base_url 末尾的斜杠不应导致重复');
+$GLOBALS['config']['base_url'] = $savedBase;
+
 // ------------------------------------------------------------------- 清理
 
 // 删掉本块创建的节点。node_purge() 会一并释放 blob 引用并删除挂在它们上面的

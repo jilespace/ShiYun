@@ -177,8 +177,10 @@ function direct_public(array $row, bool $nodeTrashed = false): array
     return [
         'id'          => (int) ($row['id'] ?? 0),
         'token'       => $token,
-        'url'         => url('direct.serve', ['t' => $token]),
-        'urlDownload' => url('direct.serve', ['t' => $token, 'dl' => '1']),
+        // 必须是绝对地址：直链是要贴到别的服务、别人的网页里去的，
+        // 相对路径出了本站就没有意义。
+        'url'         => absolute_url('direct.serve', ['t' => $token]),
+        'urlDownload' => absolute_url('direct.serve', ['t' => $token, 'dl' => '1']),
         'ipAllow'     => $row['ip_allow'] !== null ? (string) $row['ip_allow'] : '',
         'expiresAt'   => $expires !== null ? (string) $expires : null,
         'expiresText' => $expires === null

@@ -179,7 +179,7 @@ function shares_qr(): void
         exit;
     }
 
-    $link = absolute_url((string) ($share['token']));
+    $link = absolute_url('shares.open', ['t' => (string) $share['token']]);
     $svg = qr_svg($link, 6, 2);
     if ($svg === null) {
         http_response_code(500);
@@ -190,14 +190,6 @@ function shares_qr(): void
     header('Cache-Control: private, max-age=3600');
     echo $svg;
     exit;
-}
-
-/** 把站内相对链接补成绝对地址，二维码里必须能直接扫 */
-function absolute_url(string $token): string
-{
-    $https = (($_SERVER['HTTPS'] ?? '') === 'on') ? 'https' : 'http';
-    $host = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
-    return $https . '://' . $host . '/' . url('shares.open', ['t' => $token]);
 }
 
 function shares_visits(): void
