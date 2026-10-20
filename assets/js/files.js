@@ -167,6 +167,7 @@
         if (n.hidden) out += '<span class="badge" title="已隐藏">' + icon('eye-off', 'badge__ico') + '</span>';
         if (n.favorite) out += '<span class="badge badge--star" title="已收藏">' + icon('star', 'badge__ico') + '</span>';
         if (n.shareCount > 0) out += '<span class="badge" title="已分享">' + icon('link-2', 'badge__ico') + '</span>';
+        if (n.directCount > 0) out += '<span class="badge" title="有直链">' + icon('zap', 'badge__ico') + '</span>';
         if (n.memberCount > 0) out += '<span class="badge" title="协作中">' + icon('users', 'badge__ico') + '</span>';
         const cos = COS_STATE[n.cosStatus];
         if (cos) out += '<span class="badge badge--cos badge--cos-' + escapeHtml(n.cosStatus) + '" title="' + cos[1] + '">' + icon(cos[0], 'badge__ico') + '</span>';

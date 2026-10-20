@@ -347,4 +347,41 @@ $act = (string) file_get_contents(BASE_PATH . '/app/lib/activity.php');
 check(str_contains($act, "'direct.create'"), 'activity_label 应覆盖 direct.create');
 check(str_contains($act, "'direct.revoke'"), 'activity_label 应覆盖 direct.revoke');
 
+// ------------------------------------------------------------ 节点角标计数
+
+$uidT8 = (int) q_val('SELECT id FROM users ORDER BY id LIMIT 1');
+$tmpT8 = sys_get_temp_dir() . '/t15-t8.txt';
+file_put_contents($tmpT8, 'badge');
+$blobT8 = blob_ingest_file($tmpT8, null, 'text/plain');
+$nodeT8 = node_create_file($uidT8, user_root_id($uidT8), 't15-badge.txt', $blobT8, 'text/plain');
+$nodeT8Id = (int) $nodeT8['id'];
+
+$pub = node_public(node_get($uidT8, $nodeT8Id));
+check(array_key_exists('directCount', $pub), 'node_public 应含 directCount');
+check($pub['directCount'] === 0, '无直链时 directCount 应为 0');
+
+q_insert('direct_links', [
+    'user_id' => $uidT8, 'node_id' => $nodeT8Id, 'token' => direct_token(),
+    'ip_allow' => null, 'expires_at' => null, 'status' => 'active',
+    'hit_count' => 0, 'created_at' => now(),
+]);
+q_insert('direct_links', [
+    'user_id' => $uidT8, 'node_id' => $nodeT8Id, 'token' => direct_token(),
+    'ip_allow' => null, 'expires_at' => null, 'status' => 'revoked',
+    'hit_count' => 0, 'created_at' => now(),
+]);
+
+$children = node_children($uidT8, user_root_id($uidT8), ['sort' => 'name', 'dir' => 'asc', 'showHidden' => true]);
+$badgeCount = null;
+foreach ($children as $c) {
+    if ((int) $c['id'] === $nodeT8Id) {
+        $badgeCount = (int) $c['direct_count'];
+    }
+}
+check($badgeCount === 1, '只有 active 的直链计入角标（revoked 不算）');
+
+$js = (string) file_get_contents(BASE_PATH . '/assets/js/files.js');
+check(str_contains($js, 'directCount'), 'files.js 应读取 directCount');
+check(str_contains($js, "icon('zap'"), 'files.js 应用 zap 图标做直链角标');
+
 finish();

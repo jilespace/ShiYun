@@ -149,6 +149,7 @@ function node_attach_meta(int $userId, array $rows): array
     // max_allowed_packet，占位符太多也更容易把连接打满。
     $tagMap = [];
     $sharedMap = [];
+    $directMap = [];
     $memberMap = [];
     foreach (array_chunk($ids, 400) as $chunk) {
         $in = implode(',', array_fill(0, count($chunk), '?'));
@@ -172,6 +173,14 @@ function node_attach_meta(int $userId, array $rows): array
             [...$chunk, $userId]
         ) as $row) {
             $sharedMap[(int) $row['node_id']] = (int) $row['c'];
+        }
+
+        foreach (q_all(
+            "SELECT node_id, COUNT(*) AS c FROM direct_links
+             WHERE node_id IN ({$in}) AND user_id = ? AND status = 'active' GROUP BY node_id",
+            [...$chunk, $userId]
+        ) as $row) {
+            $directMap[(int) $row['node_id']] = (int) $row['c'];
         }
 
         foreach (q_all(
@@ -217,6 +226,7 @@ function node_attach_meta(int $userId, array $rows): array
         $id = (int) $row['id'];
         $row['tags'] = $tagMap[$id] ?? [];
         $row['share_count'] = $sharedMap[$id] ?? 0;
+        $row['direct_count'] = $directMap[$id] ?? 0;
         $row['member_count'] = $memberMap[$id] ?? 0;
         $row['cos'] = $cosMap[(int) ($row['blob_id'] ?? 0)] ?? null;
         $row['kind_of'] = $row['kind'] === 'file'
@@ -830,6 +840,7 @@ function node_public(array $node): array
         'tags'        => $node['tags'] ?? [],
         'childCount'  => (int) $node['child_count'],
         'shareCount'  => (int) ($node['share_count'] ?? 0),
+        'directCount' => (int) ($node['direct_count'] ?? 0),
         'memberCount' => (int) ($node['member_count'] ?? 0),
         'hasThumb'    => $kind === 'image',
         'cosStatus'   => $node['cos']['status'] ?? '',
