@@ -8,10 +8,14 @@ if (!defined('BASE_PATH')) {
 }
 
 /* =========================================================================
-   分享：令牌访问 + 可选提取密码 + 权限（仅预览 / 可下载 / 可上传）。
+   分享：令牌访问 + 可选提取密码 + 权限。
+   四种权限：仅预览 / 可下载 / 可下载并上传 / 收取箱（只收不发）。
    ========================================================================= */
 
-const SHARE_PERMISSIONS = ['preview', 'download', 'upload'];
+const SHARE_PERMISSIONS = ['preview', 'download', 'upload', 'inbox'];
+
+/** 只有这两种权限可以往分享目录里写 */
+const SHARE_UPLOAD_PERMISSIONS = ['upload', 'inbox'];
 
 function share_token(): string
 {
@@ -44,7 +48,21 @@ function share_is_live(array $share): bool
     if ($share['max_downloads'] !== null && (int) $share['download_count'] >= (int) $share['max_downloads']) {
         return false;
     }
+    // 收取箱收满即失效：对方再打开会看到「已停止收取」
+    if (($share['permission'] ?? '') === 'inbox'
+        && $share['max_files'] !== null
+        && (int) ($share['upload_count'] ?? 0) >= (int) $share['max_files']) {
+        return false;
+    }
     return true;
+}
+
+/** 收取箱是否已收满 */
+function share_inbox_full(array $share): bool
+{
+    return ($share['permission'] ?? '') === 'inbox'
+        && ($share['max_files'] ?? null) !== null
+        && (int) ($share['upload_count'] ?? 0) >= (int) $share['max_files'];
 }
 
 /** 是否需要并已通过密码校验 */
@@ -94,6 +112,11 @@ function share_public(array $share, ?array $node = null): array
         'maxDownloads' => $share['max_downloads'] !== null ? (int) $share['max_downloads'] : null,
         'downloads'   => (int) $share['download_count'],
         'views'       => (int) $share['view_count'],
+        'isInbox'     => ($share['permission'] ?? '') === 'inbox',
+        'inboxNote'   => ($share['inbox_note'] ?? null) !== null ? (string) $share['inbox_note'] : null,
+        'maxFiles'    => ($share['max_files'] ?? null) !== null ? (int) $share['max_files'] : null,
+        'uploads'     => (int) ($share['upload_count'] ?? 0),
+        'inboxFull'   => share_inbox_full($share),
         'createdAt'   => (string) $share['created_at'],
         'createdText' => time_ago((string) $share['created_at']),
         'status'      => share_is_live($share) ? 'active' : 'expired',

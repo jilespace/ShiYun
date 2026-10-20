@@ -143,18 +143,32 @@ function album_where(int $userId, bool $showHidden): array
     if (!Auth::privateUnlocked()) {
         $where[] = 'n.is_private = 0';
     }
+    // 回收站只给被删的顶层节点打了 deleted_at，子节点仍是 NULL；
+    // 不按路径排除的话，删掉文件夹后里面的照片还会赖在相册里。
+    $trashPrefix = node_trash_prefix($userId);
+    if ($trashPrefix !== '') {
+        $where[] = 'n.path NOT LIKE ?';
+        $params[] = $trashPrefix . '%';
+    }
 
     return [implode(' AND ', $where), $params];
 }
 
-/** 相册一页数据：按上传时间倒序，多取一条判断是否还有下一页 */
-function album_fetch(int $userId, bool $showHidden, int $page, int $per = 60): array
+/** 相册一页数据：优先按 EXIF 拍摄时间倒序，没有拍摄信息时回落到上传时间 */
+function album_fetch(int $userId, bool $showHidden, int $page, int $per = 60, ?string $camera = null): array
 {
     [$where, $params] = album_where($userId, $showHidden);
 
+    if ($camera !== null && $camera !== '') {
+        $where .= ' AND b.camera = ?';
+        $params[] = $camera;
+    }
+
     $rows = q_all(
-        'SELECT n.* FROM nodes n WHERE ' . $where
-        . ' ORDER BY n.created_at DESC, n.id DESC'
+        'SELECT n.*, b.taken_at, b.camera FROM nodes n'
+        . ' LEFT JOIN blobs b ON b.id = n.blob_id'
+        . ' WHERE ' . $where
+        . ' ORDER BY COALESCE(b.taken_at, n.created_at) DESC, n.id DESC'
         . ' LIMIT ' . ($per + 1) . ' OFFSET ' . (($page - 1) * $per),
         $params
     );
@@ -164,19 +178,40 @@ function album_fetch(int $userId, bool $showHidden, int $page, int $per = 60): a
         array_pop($rows);
     }
 
-    return [array_map('node_public', $rows), $hasMore];
+    $items = array_map(static function (array $row): array {
+        $n = node_public($row);
+        $n['takenAt'] = $row['taken_at'] !== null ? (string) $row['taken_at'] : null;
+        $n['camera'] = $row['camera'] !== null ? (string) $row['camera'] : null;
+        return $n;
+    }, $rows);
+
+    return [$items, $hasMore];
 }
 
-/** 按上传月份分组，保持倒序 */
+/** 按拍摄月份分组（EXIF 缺失时用上传时间），保持倒序 */
 function album_group(array $items): array
 {
     $groups = [];
     foreach ($items as $n) {
-        $ts = strtotime((string) $n['created']);
+        $ts = strtotime((string) ($n['takenAt'] ?? $n['created']));
         $month = $ts !== false ? date('Y 年 n 月', $ts) : '未知时间';
         $groups[$month][] = $n;
     }
     return $groups;
+}
+
+/** 相册里出现过的机型（用于筛选条） */
+function album_cameras(int $userId, bool $showHidden): array
+{
+    [$where, $params] = album_where($userId, $showHidden);
+
+    return q_all(
+        'SELECT b.camera, COUNT(*) AS c FROM nodes n'
+        . ' JOIN blobs b ON b.id = n.blob_id'
+        . ' WHERE ' . $where . ' AND b.camera IS NOT NULL AND b.camera <> \'\''
+        . ' GROUP BY b.camera ORDER BY c DESC LIMIT 12',
+        $params
+    );
 }
 
 function files_album(): void
@@ -184,12 +219,21 @@ function files_album(): void
     $userId = Auth::id();
     $user = Auth::user();
     $settings = user_settings($userId);
+    $showHidden = (bool) ($settings['show_hidden'] ?? false);
     $page = max(1, input_int('page', 1));
+    $camera = trim((string) input('camera', ''));
 
-    [$items, $hasMore] = album_fetch($userId, (bool) ($settings['show_hidden'] ?? false), $page);
+    [$items, $hasMore] = album_fetch($userId, $showHidden, $page, 60, $camera);
 
-    [$where, $params] = album_where($userId, (bool) ($settings['show_hidden'] ?? false));
-    $total = (int) q_val('SELECT COUNT(*) FROM nodes n WHERE ' . $where, $params);
+    [$where, $params] = album_where($userId, $showHidden);
+    if ($camera !== '') {
+        $where .= ' AND b.camera = ?';
+        $params[] = $camera;
+    }
+    $total = (int) q_val(
+        'SELECT COUNT(*) FROM nodes n LEFT JOIN blobs b ON b.id = n.blob_id WHERE ' . $where,
+        $params
+    );
 
     render('album', [
         'title'     => '相册 · 拾云',
@@ -203,6 +247,8 @@ function files_album(): void
         'page'      => $page,
         'hasMore'   => $hasMore,
         'total'     => $total,
+        'camera'    => $camera,
+        'cameras'   => album_cameras($userId, $showHidden),
     ]);
 }
 
@@ -212,8 +258,9 @@ function files_album_data(): void
     $userId = require_auth_api();
     $settings = user_settings($userId);
     $page = max(1, input_int('page', 1));
+    $camera = trim((string) input('camera', ''));
 
-    [$items, $hasMore] = album_fetch($userId, (bool) ($settings['show_hidden'] ?? false), $page);
+    [$items, $hasMore] = album_fetch($userId, (bool) ($settings['show_hidden'] ?? false), $page, 60, $camera);
 
     $groups = [];
     foreach (album_group($items) as $month => $rows) {
@@ -221,6 +268,67 @@ function files_album_data(): void
     }
 
     json_ok(['groups' => $groups, 'page' => $page, 'hasMore' => $hasMore]);
+}
+
+/**
+ * 相似照片：dHash 汉明距离 ≤ 10 的其它图片。
+ * 用于找出连拍、修图前后的重复占用。
+ */
+function files_similar(): void
+{
+    $userId = require_auth_api();
+    $settings = user_settings($userId);
+    $node = node_require($userId, input_int('id'));
+
+    if ($node['kind'] !== 'file' || $node['blob_id'] === null
+        || !str_starts_with((string) $node['mime'], 'image/')) {
+        json_fail('只有图片可以找相似。', 400);
+    }
+    // 与 preview.open 同一把锁：私密照片在锁定状态下连「有哪些相似项」都不该回答
+    if (node_in_private($userId, $node) && !Auth::privateUnlocked()) {
+        json_fail('私密空间已锁定。', 403, 'private_locked');
+    }
+
+    $blob = q_one('SELECT id, hash, phash FROM blobs WHERE id = ?', [(int) $node['blob_id']]);
+    if ($blob === null) {
+        json_fail('图片内容不存在。', 404);
+    }
+
+    // 老图还没生成缩略图时顺手补一次，指纹会随之写入
+    if ($blob['phash'] === null) {
+        $path = blob_path((string) $blob['hash']);
+        if (is_file($path)) {
+            make_thumbnail($path, (string) $blob['hash']);
+            $blob = q_one('SELECT id, hash, phash FROM blobs WHERE id = ?', [(int) $node['blob_id']]);
+        }
+    }
+    if ($blob === null || $blob['phash'] === null) {
+        json_ok(['items' => [], 'dist' => null]);
+    }
+
+    [$where, $params] = album_where($userId, (bool) ($settings['show_hidden'] ?? false));
+
+    $rows = q_all(
+        'SELECT n.*, b.taken_at, b.camera, BIT_COUNT(b.phash ^ ?) AS dist
+         FROM nodes n JOIN blobs b ON b.id = n.blob_id
+         WHERE ' . $where . ' AND b.phash IS NOT NULL AND n.id <> ?
+         HAVING dist <= 10
+         ORDER BY dist ASC, COALESCE(b.taken_at, n.created_at) DESC
+         LIMIT 24',
+        [(int) $blob['phash'], ...$params, (int) $node['id']]
+    );
+
+    // 占位符按 SQL 里出现的先后绑定：先是 SELECT 中的 phash，再是 album_where 的参数，
+    // 最后才是 WHERE 末尾的 n.id。顺序错了会静默查不到任何行。
+    $items = array_map(static function (array $row): array {
+        $n = node_public($row);
+        $n['takenAt'] = $row['taken_at'] !== null ? (string) $row['taken_at'] : null;
+        $n['camera'] = $row['camera'] !== null ? (string) $row['camera'] : null;
+        $n['dist'] = (int) $row['dist'];
+        return $n;
+    }, $rows);
+
+    json_ok(['items' => $items, 'dist' => 10]);
 }
 
 /* --------------------------------------------------------------- 数据 */

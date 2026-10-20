@@ -949,6 +949,90 @@
     white-space: nowrap;
 }
 
+/* 重复文件清理 */
+.dupelist {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-height: 54vh;
+    overflow-y: auto;
+    margin-top: 14px;
+}
+
+.dupegroup {
+    border: 1px solid var(--line);
+}
+
+.dupegroup__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.dupegroup__name {
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+
+.dupegroup__meta {
+    font-size: 0.72rem;
+    color: var(--dim-2);
+}
+
+.duperow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.duperow + .duperow {
+    border-top: 1px solid var(--line);
+}
+
+.duperow:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.duperow input {
+    flex: none;
+    accent-color: var(--signal-2);
+}
+
+.duperow__name {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.duperow__meta {
+    font-size: 0.72rem;
+    color: var(--dim-2);
+    white-space: nowrap;
+}
+
+.duperow__keep {
+    flex: none;
+    padding: 0 6px;
+    border: 1px solid var(--line-2);
+    font-size: 0.68rem;
+    color: var(--dim-2);
+}
+
+.dupenote {
+    margin-right: auto;
+    font-size: 0.75rem;
+    color: var(--dim-2);
+}
+
 /* 令牌 / API 文档 */
 .codeblock {
     margin: 0;
@@ -1162,6 +1246,45 @@ body.is-share .field {
 .dropmini.is-hot {
     border-color: var(--signal-2);
     background: rgba(61, 58, 255, 0.07);
+}
+
+.dropmini.is-done {
+    border-color: var(--line);
+    cursor: default;
+    opacity: 0.62;
+}
+
+/* 收取箱：主人的说明 + 投递者署名 */
+.inboxnote {
+    margin-bottom: 18px;
+    padding: 14px 16px;
+    border-left: 2px solid var(--signal-2);
+    background: rgba(138, 136, 255, 0.06);
+    font-size: 0.86rem;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.inboxfields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.inboxfields .mfield {
+    margin: 0;
+}
+
+/* app.css 给相邻 .mfield 加了 16px 上边距，网格里会破坏对齐 */
+.inboxfields .mfield + .mfield {
+    margin-top: 0;
+}
+
+@media (max-width: 720px) {
+    .inboxfields {
+        grid-template-columns: 1fr;
+    }
 }
 
 .dropmini svg {

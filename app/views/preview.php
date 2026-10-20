@@ -35,6 +35,9 @@ $backUrl = $parent !== null && $parent['kind'] === 'folder'
                 <button class="iconbtn" type="button" data-zoom-out aria-label="缩小"><?= lucide('minus') ?></button>
                 <span class="viewer__zoom" data-zoom-label>100%</span>
                 <button class="iconbtn" type="button" data-zoom-in aria-label="放大"><?= lucide('plus') ?></button>
+                <button class="iconbtn" type="button" data-similar aria-label="找相似照片" title="找相似照片">
+                    <?= lucide('layers') ?>
+                </button>
                 <span class="viewer__rule"></span>
             <?php endif; ?>
             <?php if ($mode === 'text' && is_textual((string) $node['mime'], (string) $node['ext']) && (int) $node['size'] <= 2 * 1024 * 1024): ?>

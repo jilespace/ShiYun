@@ -10,7 +10,7 @@ if (!defined('BASE_PATH')) {
 /**
  * 数据库结构定义。改结构时把 SCHEMA_VERSION 加一，下次请求会自动补建。
  */
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 15;
 
 /** @return list<string> */
 function schema_statements(): array
@@ -135,6 +135,10 @@ function schema_statements(): array
             size       BIGINT UNSIGNED NOT NULL,
             mime       VARCHAR(128)    NULL,
             ref_count  INT UNSIGNED    NOT NULL DEFAULT 0,
+            -- 照片指纹与拍摄信息：缩略图生成时顺手算出，用于相似照片与按拍摄时间归档
+            phash      BIGINT          NULL,
+            taken_at   DATETIME        NULL,
+            camera     VARCHAR(120)    NULL,
             created_at DATETIME        NOT NULL,
             PRIMARY KEY (id),
             UNIQUE KEY uk_blob_hash (hash)
@@ -204,16 +208,19 @@ function schema_statements(): array
             deleted_from  BIGINT UNSIGNED NULL,
             created_at    DATETIME        NOT NULL,
             updated_at    DATETIME        NOT NULL,
+            -- 最近一次被预览/下载的时间，用来识别长期没动过的冷数据
+            last_access_at DATETIME       NULL,
             PRIMARY KEY (id),
             KEY idx_node_parent (user_id, parent_id, deleted_at),
             KEY idx_node_path (user_id, path(255)),
             KEY idx_node_fav (user_id, is_favorite, deleted_at),
             KEY idx_node_name (user_id, name_key),
             KEY idx_node_ext (user_id, ext),
-            -- 相册按上传时间倒序翻页；没有这个索引会退化成 filesort（实测慢约 18 倍）
+            -- 按创建时间倒序的列表与收藏；没有这个索引会退化成 filesort（实测慢约 18 倍）
             KEY idx_node_created (user_id, created_at),
             KEY idx_node_trash (user_id, deleted_at),
-            KEY idx_node_blob (blob_id)
+            KEY idx_node_blob (blob_id),
+            KEY idx_node_access (user_id, last_access_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL;
 
@@ -278,11 +285,15 @@ function schema_statements(): array
             node_id        BIGINT UNSIGNED NOT NULL,
             token          CHAR(24)        NOT NULL,
             password_hash  VARCHAR(255)    NULL,
-            permission     ENUM('preview','download','upload') NOT NULL DEFAULT 'download',
+            permission     ENUM('preview','download','upload','inbox') NOT NULL DEFAULT 'download',
             expires_at     DATETIME        NULL,
             max_downloads  INT             NULL,
             download_count INT             NOT NULL DEFAULT 0,
             view_count     INT             NOT NULL DEFAULT 0,
+            -- 收取箱：给对方看的说明、最多收几个文件、已收几个
+            inbox_note     VARCHAR(500)    NULL,
+            max_files      INT             NULL,
+            upload_count   INT             NOT NULL DEFAULT 0,
             status         ENUM('active','revoked') NOT NULL DEFAULT 'active',
             created_at     DATETIME        NOT NULL,
             PRIMARY KEY (id),
@@ -335,6 +346,8 @@ function schema_statements(): array
             received_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
             parent_id      BIGINT UNSIGNED NULL,
             source_id      BIGINT UNSIGNED NULL,
+            -- 非空表示这是公开分享（收取箱 / 可上传）的分片会话，不绑定登录用户
+            share_id       BIGINT UNSIGNED NULL,
             hash           CHAR(64)        NULL,
             status         ENUM('pending','uploading','merging','done','failed','canceled') NOT NULL DEFAULT 'pending',
             node_id        BIGINT UNSIGNED NULL,

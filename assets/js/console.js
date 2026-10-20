@@ -208,6 +208,35 @@
                 return;
             }
 
+            const received = e.target.closest('[data-share-received]');
+            if (received) {
+                try {
+                    const data = await api('shares.received', { id: Number(received.dataset.shareReceived) }, { method: 'GET' });
+                    const rows = data.items.length
+                        ? '<div class="tblwrap"><table class="tbl"><thead><tr>'
+                            + '<th>文件</th><th>来自</th><th>留言</th><th>时间</th><th>IP</th>'
+                            + '</tr></thead><tbody>'
+                            + data.items.map((n) => '<tr>'
+                                + '<td class="tbl__name">' + escapeHtml(n.name)
+                                + '<span class="muted"> · ' + escapeHtml(n.sizeText) + '</span></td>'
+                                + '<td>' + (n.sender ? escapeHtml(n.sender) : '<span class="muted">匿名</span>') + '</td>'
+                                + '<td class="muted">' + (n.message ? escapeHtml(n.message) : '—') + '</td>'
+                                + '<td class="nowrap muted">' + escapeHtml(n.when) + '</td>'
+                                + '<td class="muted">' + escapeHtml(n.ip) + '</td>'
+                            + '</tr>').join('')
+                            + '</tbody></table></div>'
+                        : '<p class="hint">还没有收到文件。把链接发给对方，对方打开就能上传。</p>';
+
+                    SY.openModal('收到的文件 · ' + data.count,
+                        rows,
+                        '<button class="mbtn mbtn--primary" type="button" data-x="ok">关闭</button>');
+                    $('[data-modal-foot]').querySelector('[data-x="ok"]').addEventListener('click', SY.closeModal);
+                } catch (err) {
+                    toast(err.message, 'err');
+                }
+                return;
+            }
+
             const visits = e.target.closest('[data-share-visits]');
             if (visits) {
                 try {
@@ -1096,6 +1125,226 @@
         });
     }
 
+    /* ══════════════════════════════════════════════════════════ 重复文件清理 */
+
+    function pageStats() {
+        document.addEventListener('click', async (e) => {
+            if (!e.target.closest('[data-dupes]')) {
+                return;
+            }
+
+            let data;
+            try {
+                data = await api('stats.duplicates', {}, { method: 'GET' });
+            } catch (err) {
+                toast(err.message, 'err');
+                return;
+            }
+
+            const groups = data.groups || [];
+            if (!groups.length) {
+                SY.openModal('重复文件', '<p class="hint">暂时没有发现内容重复的文件。</p>',
+                    '<button class="mbtn mbtn--primary" type="button" data-x="ok">知道了</button>');
+                $('[data-modal-foot]').querySelector('[data-x="ok"]').addEventListener('click', SY.closeModal);
+                return;
+            }
+
+            // 每组默认保留最早创建的一份，其余勾选待清理
+            const body = groups.map((g, gi) => {
+                const rows = g.nodes.map((n, ni) => {
+                    const keep = ni === 0;
+                    return '<label class="duperow">'
+                        + '<input type="checkbox" data-dupe-id="' + n.id + '"'
+                        + ' data-group="' + gi + '"' + (keep ? '' : ' checked') + '>'
+                        + '<span class="duperow__name">' + escapeHtml(n.name) + '</span>'
+                        + '<span class="duperow__meta">' + escapeHtml(n.sizeText) + ' · '
+                        + escapeHtml(String(n.created).slice(0, 16)) + '</span>'
+                        + '<span class="duperow__keep"' + (keep ? '' : ' hidden') + '>保留</span>'
+                        + '</label>';
+                }).join('');
+
+                return '<section class="dupegroup" data-dupe-group="' + gi + '">'
+                    + '<header class="dupegroup__head">'
+                    + '<span class="dupegroup__name">' + escapeHtml(g.sample) + '</span>'
+                    + '<span class="dupegroup__meta">' + g.copies + ' 份 · 每份 ' + escapeHtml(g.sizeText)
+                    + ' · 可省 ' + escapeHtml(g.wastedText) + '</span>'
+                    + '</header>' + rows + '</section>';
+            }).join('');
+
+            SY.openModal('清理重复文件',
+                '<p class="hint">内容完全相同的副本会占用配额。勾选的条目将移入回收站，'
+                + '清空回收站后才会真正释放空间；每组至少保留一份。</p>'
+                + '<div class="dupelist">' + body + '</div>',
+                '<span class="dupenote" data-dupe-note></span>'
+                + '<button class="mbtn" type="button" data-x="no">取消</button>'
+                + '<button class="mbtn mbtn--primary" type="button" data-x="yes">清理选中</button>');
+
+            const foot = $('[data-modal-foot]');
+            const okBtn = foot.querySelector('[data-x="yes"]');
+            const note = foot.querySelector('[data-dupe-note]');
+            const list = $('[data-modal-body]');
+
+            function sync() {
+                const boxes = $$('[data-dupe-id]', list);
+                let checked = 0;
+                let bytes = 0;
+                const perGroup = {};
+                const firstOpen = {};
+
+                boxes.forEach((box) => {
+                    const g = box.dataset.group;
+                    perGroup[g] = perGroup[g] || { total: 0, checked: 0 };
+                    perGroup[g].total++;
+                    if (box.checked) {
+                        checked++;
+                        perGroup[g].checked++;
+                        bytes += Number(groups[Number(g)].size) || 0;
+                    } else if (!firstOpen[g]) {
+                        // 只有每组第一份未勾选的才标「保留」，否则会满屏都是保留
+                        firstOpen[g] = box;
+                    }
+                });
+
+                boxes.forEach((box) => {
+                    const tag = box.closest('.duperow').querySelector('.duperow__keep');
+                    tag.hidden = firstOpen[box.dataset.group] !== box;
+                });
+
+                // 某一组全被勾选时禁止提交
+                const bad = Object.values(perGroup).some((g) => g.checked >= g.total);
+                okBtn.disabled = checked === 0 || bad;
+                note.textContent = bad
+                    ? '每组至少要保留一份'
+                    : (checked ? '已选 ' + checked + ' 项 · 可省 ' + SY.humanSize(bytes) : '');
+            }
+
+            list.addEventListener('change', sync);
+            sync();
+
+            foot.querySelector('[data-x="no"]').addEventListener('click', SY.closeModal);
+            okBtn.addEventListener('click', async () => {
+                const ids = $$('[data-dupe-id]', list).filter((b) => b.checked).map((b) => Number(b.dataset.dupeId));
+                if (!ids.length) {
+                    toast('请先选择要清理的副本', 'err');
+                    return;
+                }
+
+                okBtn.disabled = true;
+                const label = okBtn.textContent;
+                okBtn.textContent = '处理中…';
+                try {
+                    const result = await api('stats.duplicate_delete', { ids: ids });
+                    SY.closeModal();
+                    toast('已移入回收站 ' + result.trashed + ' 项 · ' + result.bytesText);
+                    window.setTimeout(() => location.reload(), 800);
+                } catch (err) {
+                    toast(err.message, 'err');
+                    okBtn.disabled = false;
+                    okBtn.textContent = label;
+                }
+            });
+        });
+    }
+
+    /* ------------------------------------------------------- 冷数据备份 */
+
+    function pageStatsCold() {
+        document.addEventListener('click', async (e) => {
+            if (!e.target.closest('[data-cold]')) {
+                return;
+            }
+
+            let data;
+            try {
+                data = await api('stats.cold', {}, { method: 'GET' });
+            } catch (err) {
+                toast(err.message, 'err');
+                return;
+            }
+
+            const items = data.items || [];
+            if (!items.length) {
+                SY.openModal('冷数据', '<p class="hint">暂时没有符合条件（' + data.days + ' 天未访问、5 MB 以上）的文件。</p>',
+                    '<button class="mbtn mbtn--primary" type="button" data-x="ok">知道了</button>');
+                $('[data-modal-foot]').querySelector('[data-x="ok"]').addEventListener('click', SY.closeModal);
+                return;
+            }
+
+            const sizeOf = {};
+            items.forEach((n) => { sizeOf[n.id] = n.size; });
+
+            const rows = items.map((n) =>
+                '<label class="duperow">'
+                + '<input type="checkbox" data-cold-id="' + n.id + '" checked>'
+                + '<span class="duperow__name">' + escapeHtml(n.name) + '</span>'
+                + '<span class="duperow__meta">' + escapeHtml(n.sizeText) + ' · 上次访问 '
+                + escapeHtml(n.lastSeen) + '</span>'
+                + '</label>').join('');
+
+            const sources = data.sources || [];
+            const picker = sources.length
+                ? '<div class="mfield" style="margin-top:14px"><span class="mfield__label">备份到</span>'
+                    + '<select class="minput" data-cold-source>'
+                    + sources.map((s) => '<option value="' + s.id + '">' + escapeHtml(s.name)
+                        + '（' + escapeHtml(String(s.driver).toUpperCase()) + '）</option>').join('')
+                    + '</select></div>'
+                : '<p class="hint">还没有云端存储源。先到「存储源」里添加一个 COS / S3，再回来备份。</p>';
+
+            SY.openModal('冷数据备份',
+                '<p class="hint">这些文件超过 ' + data.days + ' 天没被打开过，共有 ' + data.count
+                + ' 个、合计 ' + escapeHtml(data.bytesText) + '。备份只增加云端副本，不会删除本地文件。</p>'
+                + '<div class="dupelist">' + rows + '</div>' + picker,
+                '<span class="dupenote" data-cold-note></span>'
+                + '<button class="mbtn" type="button" data-x="no">取消</button>'
+                + '<button class="mbtn mbtn--primary" type="button" data-x="yes"'
+                + (sources.length ? '' : ' disabled') + '>备份到云端</button>');
+
+            const foot = $('[data-modal-foot]');
+            const okBtn = foot.querySelector('[data-x="yes"]');
+            const note = foot.querySelector('[data-cold-note]');
+            const list = $('[data-modal-body]');
+
+            function sync() {
+                let count = 0;
+                let bytes = 0;
+                $$('[data-cold-id]', list).forEach((box) => {
+                    if (box.checked) {
+                        count++;
+                        bytes += Number(sizeOf[Number(box.dataset.coldId)]) || 0;
+                    }
+                });
+                okBtn.disabled = count === 0 || !sources.length;
+                note.textContent = count ? '已选 ' + count + ' 项 · ' + SY.humanSize(bytes) : '';
+            }
+
+            list.addEventListener('change', sync);
+            sync();
+
+            foot.querySelector('[data-x="no"]').addEventListener('click', SY.closeModal);
+            okBtn.addEventListener('click', async () => {
+                const ids = $$('[data-cold-id]', list).filter((b) => b.checked)
+                    .map((b) => Number(b.dataset.coldId));
+                if (!ids.length) {
+                    toast('请先选择要备份的文件', 'err');
+                    return;
+                }
+                const sourceId = Number(list.querySelector('[data-cold-source]').value);
+                okBtn.disabled = true;
+                const label = okBtn.textContent;
+                okBtn.textContent = '排队中…';
+                try {
+                    const result = await api('stats.cold_backup', { ids: ids, sourceId: sourceId });
+                    SY.closeModal();
+                    toast('已排队 ' + result.queued + ' 个备份任务，可在「任务」里查看进度');
+                } catch (err) {
+                    toast(err.message, 'err');
+                    okBtn.disabled = false;
+                    okBtn.textContent = label;
+                }
+            });
+        });
+    }
+
     /* ══════════════════════════════════════════════════════════ 分发 */
 
     const pages = {
@@ -1108,6 +1357,7 @@
         tokens: pageTokens,
         rules: pageRules,
         totp: pageTotp,
+        stats: () => { pageStats(); pageStatsCold(); },
     };
 
     const name = root.dataset.page;

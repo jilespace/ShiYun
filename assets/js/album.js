@@ -38,7 +38,9 @@
         more.classList.add('is-loading');
 
         try {
-            const res = await fetch(CFG.base + '?r=files.album_data&page=' + (page + 1), {
+            const camera = album.dataset.camera || '';
+            const res = await fetch(CFG.base + '?r=files.album_data&page=' + (page + 1)
+                + (camera ? '&camera=' + encodeURIComponent(camera) : ''), {
                 credentials: 'same-origin',
                 headers: {
                     'Accept': 'application/json',

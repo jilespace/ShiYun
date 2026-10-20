@@ -35,6 +35,7 @@ function preview_open(): void
     };
 
     activity_log($userId, 'file.preview', (int) $node['id'], (string) $node['name']);
+    node_touch_access($userId, (int) $node['id']);
 
     render('preview', [
         'title'     => $node['name'] . ' · 拾云',

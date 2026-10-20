@@ -23,6 +23,7 @@ function download_file(): void
     }
 
     activity_log($userId, 'file.download', (int) $node['id'], (string) $node['name']);
+    node_touch_access($userId, (int) $node['id']);
     traffic_add($userId, 'down', (int) $node['size'], 1);
 
     $limit = (int) user_setting($userId, 'download_speed_limit', 0);

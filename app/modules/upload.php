@@ -139,35 +139,30 @@ function upload_init(): void
     ]);
 }
 
-function upload_chunk(): void
+/**
+ * 把一个分片写进会话目录并更新计数。
+ * 登录上传与公开收取箱共用——两边只差「怎么找到 session」，写入逻辑必须一致，
+ * 否则续传、并发、空分片这些边界会在两套代码里各错一次。
+ *
+ * @return array{received:int,total:int,bytes:int}
+ */
+function upload_store_chunk(array $session, int $index): array
 {
-    require_method('POST');
-    require_csrf();
-    $userId = require_auth_api();
-
-    // 分片请求体是裸二进制，标识放在请求头里
-    $uploadId = preg_replace('/[^a-f0-9]/', '', (string) ($_SERVER['HTTP_X_UPLOAD_ID'] ?? '')) ?? '';
-    $index = (int) ($_SERVER['HTTP_X_CHUNK_INDEX'] ?? -1);
-
-    $session = q_one('SELECT * FROM upload_sessions WHERE upload_id = ? AND user_id = ? LIMIT 1', [$uploadId, $userId]);
-    if ($session === null) {
-        json_fail('上传会话不存在或已过期。', 404, 'no_session');
-    }
     if ($index < 0 || $index >= (int) $session['total_chunks']) {
-        json_fail('分片序号越界。');
+        throw new RuntimeException('分片序号越界。');
     }
 
-    $dir = chunk_dir($uploadId);
+    $dir = chunk_dir((string) $session['upload_id']);
     $target = $dir . '/' . $index . '.part';
 
     $in = fopen('php://input', 'rb');
     if ($in === false) {
-        json_fail('无法读取上传数据。', 500, 'io');
+        throw new RuntimeException('无法读取上传数据。');
     }
     $out = fopen($target, 'wb');
     if ($out === false) {
         fclose($in);
-        json_fail('无法写入分片。', 500, 'io');
+        throw new RuntimeException('无法写入分片。');
     }
     $written = (int) stream_copy_to_stream($in, $out);
     fclose($in);
@@ -176,7 +171,7 @@ function upload_chunk(): void
     $declared = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
     if ($written === 0 && $declared > 0) {
         @unlink($target);
-        json_fail('分片为空，请重试。', 400, 'empty_chunk');
+        throw new RuntimeException('分片为空，请重试。');
     }
     @chmod($target, 0600);
 
@@ -201,11 +196,86 @@ function upload_chunk(): void
         ], 'id = ?', [(int) $session['id']]);
     });
 
-    json_ok([
+    return [
         'received' => count($received),
         'total'    => (int) $session['total_chunks'],
         'bytes'    => $totalBytes,
-    ]);
+    ];
+}
+
+/**
+ * 合并会话的全部分片，返回合并后的临时文件路径。
+ * 缺片、IO 失败、大小不符都抛 RuntimeException，由调用方决定状态码。
+ */
+function upload_merge_chunks(array $session): string
+{
+    $received = json_decode((string) $session['received'], true);
+    $received = is_array($received) ? $received : [];
+
+    $missing = [];
+    for ($i = 0; $i < (int) $session['total_chunks']; $i++) {
+        if (!isset($received[$i])) {
+            $missing[] = $i;
+        }
+    }
+    if ($missing !== []) {
+        throw new RuntimeException('还有 ' . count($missing) . ' 个分片未收到。');
+    }
+
+    $dir = chunk_dir((string) $session['upload_id']);
+    $merged = $dir . '/merged.bin';
+
+    $out = fopen($merged, 'wb');
+    if ($out === false) {
+        throw new RuntimeException('无法合并分片。');
+    }
+
+    $expected = 0;
+    for ($i = 0; $i < (int) $session['total_chunks']; $i++) {
+        $part = $dir . '/' . $i . '.part';
+        if (!is_file($part)) {
+            fclose($out);
+            throw new RuntimeException('分片 ' . $i . ' 丢失，请重传。');
+        }
+        $in = fopen($part, 'rb');
+        if ($in === false) {
+            fclose($out);
+            throw new RuntimeException('无法读取分片 ' . $i . '。');
+        }
+        $expected += (int) stream_copy_to_stream($in, $out);
+        fclose($in);
+    }
+    fclose($out);
+
+    $size = (int) filesize($merged);
+    if ($size !== (int) $session['size'] && (int) $session['size'] > 0) {
+        @unlink($merged);
+        throw new RuntimeException('合并后大小与声明不符，请重新上传。');
+    }
+
+    return $merged;
+}
+
+function upload_chunk(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+
+    // 分片请求体是裸二进制，标识放在请求头里
+    $uploadId = preg_replace('/[^a-f0-9]/', '', (string) ($_SERVER['HTTP_X_UPLOAD_ID'] ?? '')) ?? '';
+    $index = (int) ($_SERVER['HTTP_X_CHUNK_INDEX'] ?? -1);
+
+    $session = q_one('SELECT * FROM upload_sessions WHERE upload_id = ? AND user_id = ? LIMIT 1', [$uploadId, $userId]);
+    if ($session === null) {
+        json_fail('上传会话不存在或已过期。', 404, 'no_session');
+    }
+
+    try {
+        json_ok(upload_store_chunk($session, $index));
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 409, 'chunk_failed');
+    }
 }
 
 /** 查询已收分片，供断点续传 */
@@ -246,49 +316,13 @@ function upload_complete(): void
         json_ok(['node' => node_public(node_attach_meta($userId, [node_require($userId, (int) $session['node_id'])])[0])]);
     }
 
-    $received = json_decode((string) $session['received'], true);
-    $received = is_array($received) ? $received : [];
-
-    $missing = [];
-    for ($i = 0; $i < (int) $session['total_chunks']; $i++) {
-        if (!isset($received[$i])) {
-            $missing[] = $i;
-        }
+    try {
+        $merged = upload_merge_chunks($session);
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 409, 'incomplete');
     }
-    if ($missing !== []) {
-        json_fail('还有 ' . count($missing) . ' 个分片未收到。', 409, 'incomplete', ['missing' => $missing]);
-    }
-
-    $dir = chunk_dir($uploadId);
-    $merged = $dir . '/merged.bin';
-
-    $out = fopen($merged, 'wb');
-    if ($out === false) {
-        json_fail('无法合并分片。', 500, 'io');
-    }
-
-    $expected = 0;
-    for ($i = 0; $i < (int) $session['total_chunks']; $i++) {
-        $part = $dir . '/' . $i . '.part';
-        if (!is_file($part)) {
-            fclose($out);
-            json_fail('分片 ' . $i . ' 丢失，请重传。', 409, 'incomplete');
-        }
-        $in = fopen($part, 'rb');
-        if ($in === false) {
-            fclose($out);
-            json_fail('无法读取分片 ' . $i . '。', 500, 'io');
-        }
-        $expected += (int) stream_copy_to_stream($in, $out);
-        fclose($in);
-    }
-    fclose($out);
 
     $size = (int) filesize($merged);
-    if ($size !== (int) $session['size'] && (int) $session['size'] > 0) {
-        @unlink($merged);
-        json_fail('合并后大小与声明不符，请重新上传。', 409, 'size_mismatch');
-    }
 
     // 目标目录（可能来自文件夹上传的相对路径）
     $parentId = (int) $session['parent_id'];

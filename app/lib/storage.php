@@ -449,7 +449,7 @@ function thumb_dir(): string
  * 缩略图缓存版本。改动缩略图生成逻辑（例如下面新增的 EXIF 方向校正）时必须加一，
  * 否则旧缓存会继续以错误的方向命中 —— 缓存键就是 blobs.hash，不看生成逻辑。
  */
-const THUMB_REVISION = 2;
+const THUMB_REVISION = 3;
 
 function thumb_path(string $hash): string
 {
@@ -457,26 +457,30 @@ function thumb_path(string $hash): string
 }
 
 /**
- * 读取 JPEG 的 EXIF Orientation（1–8）；读不到返回 1（即「无需旋转」）。
+ * 读取 JPEG 的拍摄信息：方向、拍摄时间、机型。
  *
- * 本机没有 exif 扩展（php -m 里只有 gd），所以按 JPEG 段结构自己走一遍：
- * APP1 段以 "Exif\0\0" 开头，随后是 TIFF 头，IFD0 里找 0x0112 标签。
- * 手机竖拍照片靠的就是这个标签，GD 不读它，缩略图就会躺倒。
+ * 本机没有 exif 扩展（php -m 里只有 gd），所以按 JPEG 段结构自己走：
+ * APP1 段以 "Exif\0\0" 开头，随后是 TIFF 头，IFD0 里取 Make/Model/Orientation，
+ * 再顺着 ExifIFD 指针取 DateTimeOriginal。
+ *
+ * @return array{orientation:int,takenAt:?string,camera:?string}
  */
-function jpeg_exif_orientation(string $path): int
+function jpeg_exif_meta(string $path): array
 {
+    $empty = ['orientation' => 1, 'takenAt' => null, 'camera' => null];
+
     $fh = @fopen($path, 'rb');
     if ($fh === false) {
-        return 1;
+        return $empty;
     }
 
-    $orientation = 1;
     $head = (string) fread($fh, 2);
     if ($head !== "\xFF\xD8") {          // 不是 JPEG
         fclose($fh);
-        return 1;
+        return $empty;
     }
 
+    $meta = $empty;
     while (!feof($fh)) {
         $marker = (string) fread($fh, 2);
         if (strlen($marker) < 2 || $marker[0] !== "\xFF") {
@@ -505,24 +509,49 @@ function jpeg_exif_orientation(string $path): int
             continue;
         }
 
-        // APP1：先确认是 EXIF，再解析 TIFF 头
         $app1 = (string) fread($fh, min($payloadLen, 65535));
         if (str_starts_with($app1, "Exif\x00\x00")) {
-            $orientation = jpeg_orientation_from_tiff(substr($app1, 6));
+            $meta = jpeg_tiff_meta(substr($app1, 6));
+            break;
         }
-        break;
+        // 有些相机/相册应用把 XMP 放在 EXIF 前面，同样是 APP1。
+        // 不能见到第一个 APP1 就收工，否则这部分照片读不到方向与拍摄时间。
+        continue;
     }
 
     fclose($fh);
 
-    return ($orientation >= 1 && $orientation <= 8) ? $orientation : 1;
+    if ($meta['orientation'] < 1 || $meta['orientation'] > 8) {
+        $meta['orientation'] = 1;
+    }
+
+    return $meta;
 }
 
-/** 从 TIFF 块里取 Orientation；大小端都支持 */
+/** 兼容旧调用：只取方向 */
+function jpeg_exif_orientation(string $path): int
+{
+    return jpeg_exif_meta($path)['orientation'];
+}
+
+/** 兼容旧调用：只从 TIFF 块里取方向 */
 function jpeg_orientation_from_tiff(string $tiff): int
 {
+    return jpeg_tiff_meta($tiff)['orientation'];
+}
+
+/**
+ * 解析 TIFF 块：Orientation(0x0112)、Make(0x010F)、Model(0x0110)、
+ * 以及 ExifIFD(0x8769) 下的 DateTimeOriginal(0x9003)。大小端都支持。
+ *
+ * @return array{orientation:int,takenAt:?string,camera:?string}
+ */
+function jpeg_tiff_meta(string $tiff): array
+{
+    $meta = ['orientation' => 1, 'takenAt' => null, 'camera' => null];
+
     if (strlen($tiff) < 8) {
-        return 1;
+        return $meta;
     }
 
     $byteOrder = substr($tiff, 0, 2);
@@ -531,7 +560,7 @@ function jpeg_orientation_from_tiff(string $tiff): int
     } elseif ($byteOrder === 'MM') {
         $little = false;
     } else {
-        return 1;
+        return $meta;
     }
 
     $u16 = static function (string $s, int $at) use ($little): int {
@@ -540,41 +569,118 @@ function jpeg_orientation_from_tiff(string $tiff): int
         return $little ? (($b << 8) | $a) : (($a << 8) | $b);
     };
     $u32 = static function (string $s, int $at) use ($little): int {
-        $a = ord($s[$at]);
-        $b = ord($s[$at + 1]);
-        $c = ord($s[$at + 2]);
-        $d = ord($s[$at + 3]);
         return $little
-            ? (($d << 24) | ($c << 16) | ($b << 8) | $a)
-            : (($a << 24) | ($b << 16) | ($c << 8) | $d);
+            ? ((ord($s[$at + 3]) << 24) | (ord($s[$at + 2]) << 16) | (ord($s[$at + 1]) << 8) | ord($s[$at]))
+            : ((ord($s[$at]) << 24) | (ord($s[$at + 1]) << 16) | (ord($s[$at + 2]) << 8) | ord($s[$at + 3]));
     };
 
     if ($u16($tiff, 2) !== 0x002A) {     // TIFF 魔数
-        return 1;
+        return $meta;
     }
 
-    $ifdOffset = $u32($tiff, 4);
-    if ($ifdOffset < 8 || $ifdOffset + 2 > strlen($tiff)) {
-        return 1;
+    $len = strlen($tiff);
+    $typeSize = [1 => 1, 2 => 1, 3 => 2, 4 => 4, 5 => 8, 7 => 1, 9 => 4, 10 => 8];
+
+    /** 读一个 IFD，返回 tag => [type, count, valueOffset] */
+    $readIfd = static function (int $ifd) use ($tiff, $len, $u16, $u32, $typeSize): array {
+        $out = [];
+        if ($ifd < 8 || $ifd + 2 > $len) {
+            return $out;
+        }
+        $count = $u16($tiff, $ifd);
+        // 防御损坏文件：一个 IFD 不可能有上千个条目
+        $count = min($count, 512);
+        for ($i = 0; $i < $count; $i++) {
+            $entry = $ifd + 2 + $i * 12;
+            if ($entry + 12 > $len) {
+                break;
+            }
+            $tag = $u16($tiff, $entry);
+            $type = $u16($tiff, $entry + 2);
+            $n = $u32($tiff, $entry + 4);
+            $size = ($typeSize[$type] ?? 1) * $n;
+            // 值不超过 4 字节时直接内联在条目里，否则是相对 TIFF 头的偏移
+            $off = $size <= 4 ? $entry + 8 : $u32($tiff, $entry + 8);
+            if ($size > 4 && ($off < 8 || $off + $size > $len)) {
+                continue;
+            }
+            $out[$tag] = [$type, $n, $off];
+        }
+        return $out;
+    };
+
+    $ascii = static function (array $entry) use ($tiff): string {
+        [, $n, $off] = $entry;
+        $raw = substr($tiff, $off, max(0, min((int) $n, 256)));
+        $raw = rtrim($raw, "\x00");
+        return trim($raw);
+    };
+
+    $ifd0 = $readIfd($u32($tiff, 4) ?: 8);
+
+    if (isset($ifd0[0x0112]) && $ifd0[0x0112][0] === 3) {
+        $meta['orientation'] = $u16($tiff, $ifd0[0x0112][2]);
     }
 
-    $count = $u16($tiff, $ifdOffset);
-    for ($i = 0; $i < $count; $i++) {
-        $entry = $ifdOffset + 2 + $i * 12;
-        if ($entry + 12 > strlen($tiff)) {
-            return 1;
-        }
-        if ($u16($tiff, $entry) !== 0x0112) {   // Orientation
-            continue;
-        }
-        // 类型应为 SHORT(3)、数量 1，取值就在值字段的前两字节
-        if ($u16($tiff, $entry + 2) !== 3 || $u32($tiff, $entry + 4) !== 1) {
-            return 1;
-        }
-        return $u16($tiff, $entry + 8);
+    $make = isset($ifd0[0x010F]) ? $ascii($ifd0[0x010F]) : '';
+    $model = isset($ifd0[0x0110]) ? $ascii($ifd0[0x0110]) : '';
+    if ($model !== '' && $make !== '' && str_starts_with($model, $make)) {
+        $make = '';   // "Apple iPhone 15" 这类不重复拼前缀
+    }
+    $camera = trim($make . ' ' . $model);
+    if ($camera !== '') {
+        $meta['camera'] = mb_substr($camera, 0, 120);
     }
 
-    return 1;
+    if (isset($ifd0[0x8769]) && $ifd0[0x8769][0] === 4) {
+        $exifIfd = $readIfd($u32($tiff, $ifd0[0x8769][2]));
+        if (isset($exifIfd[0x9003])) {
+            $raw = $ascii($exifIfd[0x9003]);
+            if (preg_match('/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/', $raw, $m)
+                && (int) $m[1] >= 1970 && (int) $m[1] <= 2100) {
+                $meta['takenAt'] = sprintf('%04d-%02d-%02d %02d:%02d:%02d',
+                    (int) $m[1], (int) $m[2], (int) $m[3], (int) $m[4], (int) $m[5], (int) $m[6]);
+            }
+        }
+    }
+
+    return $meta;
+}
+
+/**
+ * 差值哈希（dHash，64 位）：缩到 9×8 灰度，比较左右相邻像素。
+ * 同一张图的不同尺寸/压缩版本距离通常 ≤ 10。
+ */
+function image_dhash($img): ?int
+{
+    $w = imagesx($img);
+    $h = imagesy($img);
+    if ($w < 2 || $h < 1) {
+        return null;
+    }
+
+    $small = @imagecreatetruecolor(9, 8);
+    if ($small === false) {
+        return null;
+    }
+    imagecopyresampled($small, $img, 0, 0, 0, 0, 9, 8, $w, $h);
+
+    $bits = 0;
+    for ($y = 0; $y < 8; $y++) {
+        $prev = null;
+        for ($x = 0; $x < 9; $x++) {
+            $rgb = imagecolorat($small, $x, $y);
+            $gray = (((($rgb >> 16) & 0xFF) * 299) + ((($rgb >> 8) & 0xFF) * 587) + (($rgb & 0xFF) * 114)) / 1000;
+            if ($prev !== null) {
+                $bits = ($bits << 1) | ($prev > $gray ? 1 : 0);
+            }
+            $prev = $gray;
+        }
+    }
+
+    imagedestroy($small);
+
+    return $bits;
 }
 
 /** 按 EXIF Orientation 把 GD 图像摆正（就地改写并返回新句柄） */
@@ -688,8 +794,12 @@ function make_thumbnail(string $sourcePath, string $hash, int $max = 480): ?stri
         return null;
     }
 
-    // 先在解码之前把方向读出来：它决定旋转时会不会多开一张同尺寸的图
-    $orientation = $info[2] === IMAGETYPE_JPEG ? jpeg_exif_orientation($sourcePath) : 1;
+    // 先在解码之前把 EXIF 读出来：方向决定旋转时会不会多开一张同尺寸的图，
+    // 拍摄时间与机型则在缩略图成功后写回 blobs，供相册按真实拍摄时间归档。
+    $exif = $info[2] === IMAGETYPE_JPEG
+        ? jpeg_exif_meta($sourcePath)
+        : ['orientation' => 1, 'takenAt' => null, 'camera' => null];
+    $orientation = $exif['orientation'];
 
     $gate = thumb_memory_gate($w, $h, in_array($orientation, [5, 6, 7, 8], true));
     if (!$gate['ok']) {
@@ -739,6 +849,21 @@ function make_thumbnail(string $sourcePath, string $hash, int $max = 480): ?stri
     }
 
     $ok = @imagejpeg($dst, $out, 82);
+    if (!$ok) {
+        imagedestroy($dst);
+        return null;
+    }
 
-    return $ok ? $out : null;
+    // 指纹与拍摄信息只在缩略图成功落盘后写：失败了下次还会重试，
+    // 提前写入会让「有 phash 但没缩略图」的半成品留在库里。
+    $phash = image_dhash($dst);
+    q_update('blobs', [
+        'phash'    => $phash,
+        'taken_at' => $exif['takenAt'],
+        'camera'   => $exif['camera'],
+    ], 'hash = ?', [$hash]);
+
+    imagedestroy($dst);
+
+    return $out;
 }

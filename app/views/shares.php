@@ -20,6 +20,7 @@ $totalDowns = array_sum(array_map(static fn (array $s): int => (int) $s['downloa
 $permLabel = static fn (string $p): string => match ($p) {
     'preview'  => '仅预览',
     'upload'   => '可下载并上传',
+    'inbox'    => '收取箱',
     default    => '可下载',
 };
 ?>
@@ -35,6 +36,7 @@ $permLabel = static fn (string $p): string => match ($p) {
                     <h1 class="pagehead__title">分享</h1>
                     <p class="pagehead__sub">
                         给文件或文件夹生成一个链接，可以加提取密码、设有效期、限制权限。
+                        文件夹还能开成收取箱：对方只能上传，看不到里面的内容。
                         在文件列表里右键「分享」也能创建。
                     </p>
                 </div>
@@ -87,7 +89,7 @@ $permLabel = static fn (string $p): string => match ($p) {
                             <thead>
                                 <tr>
                                     <th>内容</th><th>权限</th><th>链接</th><th>有效期</th>
-                                    <th class="num">浏览</th><th class="num">下载</th><th>状态</th><th></th>
+                                    <th class="num">浏览</th><th class="num">下载 / 收到</th><th>状态</th><th></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -107,6 +109,17 @@ $permLabel = static fn (string $p): string => match ($p) {
                                             <span class="pill">
                                                 <?= e($permLabel((string) $s['permission'])) ?>
                                                 <?= $s['hasPassword'] ? ' · 需密码' : '' ?>
+                                                <?php if (!empty($s['isInbox'])): ?>
+                                                    <?= ($s['maxFiles'] ?? null) !== null
+                                                        ? ' · 上限 ' . (int) $s['maxFiles']
+                                                        : ' · 不限量' ?>
+                                                <?php else: ?>
+                                                    <?= (int) ($s['maxDownloads'] ?? 0) === 1
+                                                        ? ' · 一次'
+                                                        : ((int) ($s['maxDownloads'] ?? 0) > 1
+                                                            ? ' · 限 ' . (int) $s['maxDownloads'] . ' 次'
+                                                            : '') ?>
+                                                <?php endif; ?>
                                             </span>
                                         </td>
                                         <td>
@@ -118,15 +131,25 @@ $permLabel = static fn (string $p): string => match ($p) {
                                         </td>
                                         <td class="muted nowrap"><?= e((string) $s['expiresText']) ?></td>
                                         <td class="num"><?= (int) $s['views'] ?></td>
-                                        <td class="num"><?= (int) $s['downloads'] ?></td>
+                                        <td class="num">
+                                            <?php if (!empty($s['isInbox'])): ?>
+                                                <?= (int) $s['uploads'] ?>
+                                            <?php else: ?>
+                                                <?= (int) $s['downloads'] ?>
+                                            <?php endif; ?>
+                                        </td>
                                         <td>
                                             <span class="pill<?= $live ? '' : ' pill--muted' ?>">
                                                 <span class="pill__dot" style="--pill:<?= $live ? '#4ad07a' : 'rgba(244,242,236,.32)' ?>"></span>
-                                                <?= $live ? '生效中' : '已失效' ?>
+                                                <?= $live ? '生效中' : (!empty($s['inboxFull']) ? '已收满' : '已失效') ?>
                                             </span>
                                         </td>
                                         <td>
                                             <div class="tbl__acts">
+                                                <?php if (!empty($s['isInbox'])): ?>
+                                                    <button class="chipbtn" type="button"
+                                                            data-share-received="<?= (int) $s['id'] ?>">查看收到</button>
+                                                <?php endif; ?>
                                                 <button class="chipbtn" type="button" data-share-visits="<?= (int) $s['id'] ?>">访问记录</button>
                                                 <?php if ($live): ?>
                                                     <button class="chipbtn chipbtn--danger" type="button"

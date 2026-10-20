@@ -140,3 +140,17 @@
         display: none;
     }
 }
+
+/* 机型筛选：与统计页的时间胶囊同一套视觉，避免相册里出现第二种筛选语言 */
+.albfilter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 0 clamp(16px, 2.4vw, 30px) 14px;
+}
+
+.albfilter__n {
+    margin-left: 6px;
+    color: var(--dim-2);
+    font-variant-numeric: tabular-nums;
+}

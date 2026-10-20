@@ -19,10 +19,15 @@ if (!defined('BASE_PATH')) {
 /** @var array<string,string> $errors */
 
 $appName = (string) config('app_name');
-$canDownload = ($share['permission'] ?? 'preview') !== 'preview';
-$canUpload = ($share['permission'] ?? '') === 'upload';
+$isInbox = ($share['permission'] ?? '') === 'inbox';
+// 收取箱既不列目录也不能下载：只有「可下载」和「可下载并上传」才给下载入口
+$canDownload = in_array((string) ($share['permission'] ?? 'preview'), ['download', 'upload'], true);
+$canUpload = in_array((string) ($share['permission'] ?? ''), SHARE_UPLOAD_PERMISSIONS, true)
+    && ($node['kind'] ?? '') === 'folder';
 
-$crumbs = array_values(array_filter($crumbs, static fn (array $c): bool => (int) $c['id'] !== 0));
+// 「已失效」状态下 shares_resolve() 只传 title/state/token，不会传 crumbs；
+// 不兜底会让过期链接的落地页直接 500，而不是显示「分享不存在」。
+$crumbs = array_values(array_filter($crumbs ?? [], static fn (array $c): bool => (int) $c['id'] !== 0));
 ?>
 <div class="sharewrap">
     <div class="sharebrand">
@@ -84,11 +89,16 @@ $crumbs = array_values(array_filter($crumbs, static fn (array $c): bool => (int)
                 <div class="sharebox__meta">
                     <h1 class="sharebox__name"><?= e((string) $node['name']) ?></h1>
                     <p class="sharebox__sub">
-                        <?= e((string) $owner) ?> 分享 ·
-                        <?= ($node['kind'] ?? '') === 'folder'
-                            ? (int) $node['childCount'] . ' 个项目'
-                            : e((string) $node['sizeText']) ?>
-                        · <?= e((string) ($share['expiresText'] ?? '')) ?>
+                        <?php if ($isInbox): ?>
+                            <?= e((string) $owner) ?> 的收取箱 · 只能上传，看不到里面的内容
+                            · <?= e((string) ($share['expiresText'] ?? '')) ?>
+                        <?php else: ?>
+                            <?= e((string) $owner) ?> 分享 ·
+                            <?= ($node['kind'] ?? '') === 'folder'
+                                ? (int) $node['childCount'] . ' 个项目'
+                                : e((string) $node['sizeText']) ?>
+                            · <?= e((string) ($share['expiresText'] ?? '')) ?>
+                        <?php endif; ?>
                     </p>
                 </div>
                 <div class="sharebox__acts">
@@ -108,7 +118,12 @@ $crumbs = array_values(array_filter($crumbs, static fn (array $c): bool => (int)
                     </div>
                 <?php endif; ?>
 
-                <?php if (($node['kind'] ?? '') === 'file'): ?>
+                <?php if ($isInbox): ?>
+                    <?php if (($share['inboxNote'] ?? '') !== ''): ?>
+                        <div class="inboxnote"><?= e((string) $share['inboxNote']) ?></div>
+                    <?php endif; ?>
+
+                <?php elseif (($node['kind'] ?? '') === 'file'): ?>
                     <?php
                     $mime = (string) ($node['mime'] ?? '');
                     $ext = (string) ($node['ext'] ?? '');
@@ -181,11 +196,34 @@ $crumbs = array_values(array_filter($crumbs, static fn (array $c): bool => (int)
                     <?php endif; ?>
                 <?php endif; ?>
 
-                <?php if ($canUpload && ($node['kind'] ?? '') === 'folder'): ?>
+                <?php if ($canUpload): ?>
+                    <?php if ($isInbox): ?>
+                        <div class="inboxfields">
+                            <label class="mfield">
+                                <span class="mfield__label">你的称呼（可选）</span>
+                                <input class="minput" data-sender maxlength="40" placeholder="让主人知道是谁传的">
+                            </label>
+                            <label class="mfield">
+                                <span class="mfield__label">留言（可选）</span>
+                                <input class="minput" data-message maxlength="300" placeholder="一两句说明">
+                            </label>
+                        </div>
+                    <?php endif; ?>
+
                     <div class="dropmini" data-share-drop style="margin-top:20px">
                         <?= lucide('cloud-upload') ?>
                         <p class="dropmini__title">把文件拖到这里，或点击选择</p>
-                        <p class="dropmini__hint">上传到「<?= e((string) $node['name']) ?>」</p>
+                        <p class="dropmini__hint">
+                            <?php if ($isInbox): ?>
+                                文件会直接送到 <?= e((string) $owner) ?> 的「<?= e((string) $node['name']) ?>」
+                                <?php if (($share['maxFiles'] ?? null) !== null): ?>
+                                    <span data-inbox-left>· 还能提交
+                                        <?= max(0, (int) $share['maxFiles'] - (int) $share['uploads']) ?> 个</span>
+                                <?php endif; ?>
+                            <?php else: ?>
+                                上传到「<?= e((string) $node['name']) ?>」
+                            <?php endif; ?>
+                        </p>
                         <input type="file" multiple hidden data-share-file>
                     </div>
                     <ul class="upqueue" data-share-queue></ul>

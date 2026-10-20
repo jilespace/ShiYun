@@ -631,3 +631,53 @@ h4.doc__h, h5.doc__h, h6.doc__h { font-size: 1rem; }
     line-height: 1.7;
     tab-size: 4;
 }
+
+/* 相似照片：弹窗里的缩略图网格 */
+.vsim {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.vsim__cell {
+    position: relative;
+    display: block;
+    aspect-ratio: 1;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.vsim__cell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.vsim__cap {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 14px 6px 5px;
+    font-size: 0.66rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.72));
+}
+
+.vsim__dist {
+    position: absolute;
+    top: 5px;
+    left: 5px;
+    padding: 1px 6px;
+    border-radius: 99px;
+    background: rgba(8, 9, 11, 0.72);
+    color: var(--dim);
+    font-size: 0.62rem;
+}

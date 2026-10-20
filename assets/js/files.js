@@ -766,11 +766,15 @@
         const n = state.nodes.get(id);
         if (!n) return;
 
+        const folderOpt = n.kind === 'folder'
+            ? '<option value="inbox">收取箱（只收不发）</option>'
+            : '';
         const body = '<div class="mfield"><span class="mfield__label">访问权限</span>'
             + '<select class="minput" data-perm>'
             + '<option value="preview">仅预览</option>'
             + '<option value="download" selected>可下载</option>'
-            + '<option value="upload">可下载并上传</option>'
+            + (n.kind === 'folder' ? '<option value="upload">可下载并上传</option>' : '')
+            + folderOpt
             + '</select></div>'
             + '<div class="mfield"><span class="mfield__label">有效期</span>'
             + '<select class="minput" data-exp>'
@@ -779,12 +783,44 @@
             + '<option value="7" selected>7 天</option>'
             + '<option value="30">30 天</option>'
             + '</select></div>'
+            + '<div class="mfield"><span class="mfield__label">下载次数</span>'
+            + '<select class="minput" data-dl>'
+            + '<option value="0" selected>不限次数</option>'
+            + '<option value="1">仅 1 次（一次性链接）</option>'
+            + '<option value="5">5 次</option>'
+            + '<option value="20">20 次</option>'
+            + '</select></div>'
+            + '<div class="mfield" data-inbox-only hidden><span class="mfield__label">收取说明（对方会看到）</span>'
+            + '<input class="minput" data-note maxlength="500" placeholder="例如：请把项目资料传到这里"></div>'
+            + '<div class="mfield" data-inbox-only hidden><span class="mfield__label">最多收几个文件</span>'
+            + '<select class="minput" data-maxfiles>'
+            + '<option value="0">不限</option>'
+            + '<option value="20">20 个</option>'
+            + '<option value="50" selected>50 个</option>'
+            + '<option value="200">200 个</option>'
+            + '</select></div>'
             + '<div class="mfield"><span class="mfield__label">提取密码（留空则不需要）</span>'
             + '<input class="minput" data-pass maxlength="32" placeholder="可选"></div>';
 
         openModal('分享「' + n.name + '」', body,
             '<button class="mbtn" type="button" data-x="no">取消</button>'
             + '<button class="mbtn mbtn--primary" type="button" data-x="yes">生成链接</button>');
+
+        // 仅预览与收取箱都没有下载动作，次数限制对它无意义——切换权限时直接禁用；
+        // 收取箱还要露出「收取说明 / 最多收几个」两个字段。
+        const permSel = modalBody.querySelector('[data-perm]');
+        const dlSel = modalBody.querySelector('[data-dl]');
+        const noteInput = modalBody.querySelector('[data-note]');
+        const maxfilesSel = modalBody.querySelector('[data-maxfiles]');
+        const syncPerm = () => {
+            const isInbox = permSel.value === 'inbox';
+            Array.from(modalBody.querySelectorAll('[data-inbox-only]'))
+                .forEach((el) => { el.hidden = !isInbox; });
+            dlSel.disabled = isInbox || permSel.value === 'preview';
+            if (dlSel.disabled) dlSel.value = '0';
+        };
+        permSel.addEventListener('change', syncPerm);
+        syncPerm();
 
         modalFoot.querySelector('[data-x="no"]').addEventListener('click', closeModal);
         modalFoot.querySelector('[data-x="yes"]').addEventListener('click', async (ev) => {
@@ -794,8 +830,11 @@
             try {
                 const data = await api('shares.create', {
                     id: id,
-                    permission: modalBody.querySelector('[data-perm]').value,
+                    permission: permSel.value,
                     days: Number(modalBody.querySelector('[data-exp]').value),
+                    maxDownloads: Number(dlSel.value),
+                    note: noteInput ? noteInput.value : '',
+                    maxFiles: maxfilesSel ? Number(maxfilesSel.value) : 0,
                     password: modalBody.querySelector('[data-pass]').value,
                 });
                 const link = new URL(data.share.url, location.href).href;
@@ -806,7 +845,18 @@
                     + '<input class="minput" data-link readonly value="' + escapeHtml(link) + '"></div>'
                     + (data.share.password ? '<p class="mhint" style="margin-top:10px">提取密码：<b>'
                         + escapeHtml(data.share.password) + '</b></p>' : '')
-                    + '<p class="mhint" style="margin-top:10px">' + escapeHtml(data.share.expiresText) + '</p>',
+                    + '<p class="mhint" style="margin-top:10px">' + escapeHtml(data.share.expiresText) + '</p>'
+                    + (data.share.isInbox
+                        ? '<p class="mhint" style="margin-top:6px">这是收取箱：对方打开只能上传，'
+                            + '看不到文件夹里已有的内容。</p>'
+                        : '')
+                    + (data.share.maxDownloads
+                        ? '<p class="mhint" style="margin-top:6px">'
+                            + (data.share.maxDownloads === 1
+                                ? '一次性链接：下载 1 次后自动失效。'
+                                : '最多可下载 ' + data.share.maxDownloads + ' 次。')
+                            + '</p>'
+                        : ''),
                     '<button class="mbtn" type="button" data-x="qr">' + '二维码' + '</button>'
                     + '<button class="mbtn mbtn--primary" type="button" data-x="copy">复制链接</button>'
                 );

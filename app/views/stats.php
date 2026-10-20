@@ -218,11 +218,24 @@ $distColors = [
                                 <?= lucide('layers') ?>
                                 <span class="suggest__txt">
                                     「<?= e((string) $dupe['sample']) ?>」等 <?= (int) $dupe['copies'] ?> 个条目内容完全相同，
-                                    冗余 <?= e(format_bytes((float) $dupe['wasted'])) ?>。物理文件已自动合并，删掉多余副本可释放配额。
+                                    多出来的副本占 <?= e(format_bytes((float) $dupe['wasted'])) ?>。
                                 </span>
-                                <span class="suggest__num"><?= (int) $dupe['copies'] ?> 份</span>
+                                <button class="chipbtn" type="button" data-dupes>查看并清理</button>
                             </div>
                         <?php endforeach; ?>
+
+                        <?php if (($suggestions['cold']['count'] ?? 0) > 0): ?>
+                            <div class="suggest__row">
+                                <?= lucide('cloud') ?>
+                                <span class="suggest__txt">
+                                    有 <?= (int) $suggestions['cold']['count'] ?> 个文件超过
+                                    <?= (int) $suggestions['cold']['days'] ?> 天没打开过，
+                                    合计 <?= e(format_bytes((float) $suggestions['cold']['bytes'])) ?>。
+                                    可以备份到云端存储源，本地仍保留一份。
+                                </span>
+                                <button class="chipbtn" type="button" data-cold>查看并备份</button>
+                            </div>
+                        <?php endif; ?>
 
                         <?php foreach (array_slice($suggestions['largest'], 0, 4) as $big): ?>
                             <div class="suggest__row">
@@ -236,17 +249,7 @@ $distColors = [
                             </div>
                         <?php endforeach; ?>
 
-                        <?php if ($suggestions['stale'] !== []): ?>
-                            <div class="suggest__row">
-                                <?= lucide('clock') ?>
-                                <span class="suggest__txt">
-                                    <?= count($suggestions['stale']) ?> 个大文件超过一年没动过，
-                                    合计 <?= e(format_bytes((float) array_sum(array_map(static fn (array $r): int => (int) $r['size'], $suggestions['stale'])))) ?>。
-                                </span>
-                            </div>
-                        <?php endif; ?>
-
-                        <?php if ($suggestions['trashCount'] === 0 && $suggestions['dupes'] === [] && $suggestions['stale'] === []): ?>
+                        <?php if ($suggestions['trashCount'] === 0 && $suggestions['dupes'] === [] && ($suggestions['cold']['count'] ?? 0) === 0): ?>
                             <div class="suggest__row">
                                 <?= lucide('check-circle') ?>
                                 <span class="suggest__txt">空间很干净，没什么可清理的。</span>

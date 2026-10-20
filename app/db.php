@@ -109,13 +109,58 @@ function db_migrate(PDO $pdo): void
         }
     }
 
-    // nodes(user_id, created_at)：让相册的「按上传时间倒序 + LIMIT」走索引而不是 filesort。
+    // nodes(user_id, created_at)：让按创建时间倒序的列表走索引而不是 filesort。
     // CREATE TABLE IF NOT EXISTS 不会给已存在的表补索引，所以这里单独判断一次。
     $nodeIdx = array_column($pdo->query('SHOW INDEX FROM nodes')->fetchAll(), 'Key_name');
     if (!in_array('idx_node_created', $nodeIdx, true)) {
         $pdo->exec('ALTER TABLE nodes ADD INDEX idx_node_created (user_id, created_at)');
     }
 
+    // upload_sessions.share_id：公开收取箱的分片会话
+    $usCols2 = array_column($pdo->query('SHOW COLUMNS FROM upload_sessions')->fetchAll(), 'Field');
+    if (!in_array('share_id', $usCols2, true)) {
+        $pdo->exec('ALTER TABLE upload_sessions ADD COLUMN share_id BIGINT UNSIGNED NULL AFTER source_id');
+    }
+
+    // shares：收取箱（只收不发）
+    $shareCols = array_column($pdo->query('SHOW COLUMNS FROM shares')->fetchAll(), 'Field');
+    if (!in_array('inbox_note', $shareCols, true)) {
+        $pdo->exec('ALTER TABLE shares ADD COLUMN inbox_note VARCHAR(500) NULL AFTER view_count');
+    }
+    if (!in_array('max_files', $shareCols, true)) {
+        $pdo->exec('ALTER TABLE shares ADD COLUMN max_files INT NULL AFTER inbox_note');
+    }
+    if (!in_array('upload_count', $shareCols, true)) {
+        $pdo->exec('ALTER TABLE shares ADD COLUMN upload_count INT NOT NULL DEFAULT 0 AFTER max_files');
+    }
+    foreach ($pdo->query('SHOW COLUMNS FROM shares')->fetchAll() as $row) {
+        if ($row['Field'] === 'permission' && !str_contains((string) $row['Type'], 'inbox')) {
+            $pdo->exec("ALTER TABLE shares MODIFY COLUMN permission
+                ENUM('preview','download','upload','inbox') NOT NULL DEFAULT 'download'");
+        }
+    }
+
+    // nodes.last_access_at：冷数据识别
+    $nodeCols = array_column($pdo->query('SHOW COLUMNS FROM nodes')->fetchAll(), 'Field');
+    if (!in_array('last_access_at', $nodeCols, true)) {
+        $pdo->exec('ALTER TABLE nodes ADD COLUMN last_access_at DATETIME NULL AFTER updated_at');
+    }
+    $nodeIdx2 = array_column($pdo->query('SHOW INDEX FROM nodes')->fetchAll(), 'Key_name');
+    if (!in_array('idx_node_access', $nodeIdx2, true)) {
+        $pdo->exec('ALTER TABLE nodes ADD INDEX idx_node_access (user_id, last_access_at)');
+    }
+
+    // blobs 的照片指纹与拍摄信息（相册智能整理）
+    $blobCols = array_column($pdo->query('SHOW COLUMNS FROM blobs')->fetchAll(), 'Field');
+    if (!in_array('phash', $blobCols, true)) {
+        $pdo->exec('ALTER TABLE blobs ADD COLUMN phash BIGINT NULL AFTER ref_count');
+    }
+    if (!in_array('taken_at', $blobCols, true)) {
+        $pdo->exec('ALTER TABLE blobs ADD COLUMN taken_at DATETIME NULL AFTER phash');
+    }
+    if (!in_array('camera', $blobCols, true)) {
+        $pdo->exec('ALTER TABLE blobs ADD COLUMN camera VARCHAR(120) NULL AFTER taken_at');
+    }
     $pdo->prepare('INSERT INTO app_meta (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v)')
         ->execute(['schema_version', (string) SCHEMA_VERSION]);
 }

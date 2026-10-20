@@ -115,6 +115,11 @@ function shares_create(): void
         json_fail('权限不合法。');
     }
 
+    // 写权限（可上传 / 收取箱）只对文件夹有意义
+    if (in_array($permission, SHARE_UPLOAD_PERMISSIONS, true) && $node['kind'] !== 'folder') {
+        json_fail('只有文件夹能开启上传或收取箱。');
+    }
+
     $days = input_int('days', 0);
     $expires = $days > 0 ? date('Y-m-d H:i:s', time() + min(3650, $days) * 86400) : null;
 
@@ -123,7 +128,21 @@ function shares_create(): void
         json_fail('提取密码最多 32 位。');
     }
 
-    $maxDownloads = input_int('maxDownloads', 0);
+    // 仅预览与收取箱都没有下载入口，次数限制没有意义；顺手夹一下上限，避免脏数据
+    $maxDownloads = in_array($permission, ['preview', 'inbox'], true)
+        ? 0
+        : min(100000, max(0, input_int('maxDownloads', 0)));
+
+    $inboxNote = null;
+    $maxFiles = null;
+    if ($permission === 'inbox') {
+        $note = trim((string) input('note', ''));
+        $inboxNote = $note !== '' ? mb_substr($note, 0, 500) : null;
+
+        // 0 或留空 = 不限数量；给个上限防止意外开成无限量
+        $maxFiles = min(5000, max(0, input_int('maxFiles', 0)));
+        $maxFiles = $maxFiles > 0 ? $maxFiles : null;
+    }
 
     $id = q_insert('shares', [
         'user_id'        => $userId,
@@ -135,6 +154,9 @@ function shares_create(): void
         'max_downloads'  => $maxDownloads > 0 ? $maxDownloads : null,
         'download_count' => 0,
         'view_count'     => 0,
+        'inbox_note'     => $inboxNote,
+        'max_files'      => $maxFiles,
+        'upload_count'   => 0,
         'status'         => 'active',
         'created_at'     => now(),
     ]);
@@ -206,7 +228,7 @@ function shares_visits(): void
             'device' => detect_device((string) $v['ua']),
             'action' => match ($v['action']) {
                 'download' => '下载',
-                'upload'   => '上传',
+                'upload'   => (string) $share['permission'] === 'inbox' ? '收到' : '上传',
                 default    => '浏览',
             },
             'when'   => time_ago((string) $v['created_at']),
@@ -219,17 +241,43 @@ function shares_visits(): void
 
 /* ============================================================ 站外：访问分享 */
 
-function shares_resolve(): array
+/**
+ * 解析分享链接。
+ *
+ * $allowFullInbox 只给投递接口用：收取箱收满时 share_is_live() 会返回 false，
+ * 但我们需要让上传请求拿到明确的 409「已收满」，而不是被当成失效链接直接 404。
+ */
+function shares_resolve(bool $allowFullInbox = false): array
 {
-    $token = (string) ($_GET['t'] ?? $_POST['t'] ?? '');
+    // 用 input() 而不是直接读 $_POST：分片初始化/合并是 JSON 请求，$_POST 是空的
+    $token = (string) input('t', '');
     $share = share_find($token);
-    if ($share === null || !share_is_live($share)) {
-        http_response_code(404);
+    if ($share === null) {
+        // 用 410 而不是 404：nginx 默认会用自己的 404 页面替换响应体，
+        // 那样这里精心写的「分享不存在」落地页永远露不出来。
+        http_response_code(410);
         share_page([
             'title'  => '分享不存在或已失效',
             'state'  => 'gone',
             'token'  => $token,
         ]);
+    }
+    if (!share_is_live($share)) {
+        $onlyFull = $allowFullInbox
+            && share_inbox_full($share)
+            && (string) $share['status'] === 'active'
+            && ($share['expires_at'] === null || strtotime((string) $share['expires_at']) >= time());
+
+        if (!$onlyFull) {
+            http_response_code(410);
+            // 收满的收取箱别说成「分享失效」，对方会以为链接错了
+            $title = share_inbox_full($share) ? '这个收取箱已经收满了' : '分享不存在或已失效';
+            share_page([
+                'title'  => $title,
+                'state'  => 'gone',
+                'token'  => $token,
+            ]);
+        }
     }
 
     $node = node_get((int) $share['user_id'], (int) $share['node_id']);
@@ -253,7 +301,8 @@ function share_render(array $share, array $node, string $state, array $extra = [
     $crumbs = [];
     $currentId = (int) $node['id'];
 
-    if ($node['kind'] === 'folder' && $state === 'ok') {
+    // 收取箱是只写入口：绝不能把目录内容渲染出来，否则「给我传东西」等于「给你看我的文件夹」
+    if ($node['kind'] === 'folder' && $state === 'ok' && ($share['permission'] ?? '') !== 'inbox') {
         $folderId = (int) ($_GET['folder'] ?? $node['id']);
         // 只允许在分享目录子树内浏览
         $target = node_get((int) $share['user_id'], $folderId);
@@ -332,8 +381,11 @@ function shares_unlock(): void
 /** 分享目录内的 JSON 列表（前端翻目录用） */
 function shares_browse(): void
 {
-    [$share, $node] = shares_resolve();
+    [$share, $node] = shares_resolve(true);
 
+    if (($share['permission'] ?? '') === 'inbox') {
+        json_fail('收取箱不提供浏览。', 403, 'forbidden');
+    }
     if (!share_unlocked($share)) {
         json_fail('需要提取密码。', 403, 'locked');
     }
@@ -360,8 +412,12 @@ function shares_browse(): void
 /** 分享下载（单个文件或整个目录打包） */
 function shares_download(): void
 {
-    [$share, $node] = shares_resolve();
+    [$share, $node] = shares_resolve(true);
 
+    if (($share['permission'] ?? '') === 'inbox') {
+        http_response_code(403);
+        exit('这是收取箱，只接受上传，不提供下载');
+    }
     if (!share_unlocked($share)) {
         redirect(url('shares.open', ['t' => (string) $share['token']]));
     }
@@ -372,6 +428,7 @@ function shares_download(): void
 
     q_exec('UPDATE shares SET download_count = download_count + 1 WHERE id = ?', [(int) $share['id']]);
     share_visit((int) $share['id'], 'download', (int) $node['id']);
+    node_touch_access((int) $share['user_id'], (int) $node['id']);
 
     if ($node['kind'] === 'file') {
         if ($node['blob_id'] === null) {
@@ -399,8 +456,12 @@ function shares_raw(): void
     require_once BASE_PATH . '/app/modules/download.php';
     require_once BASE_PATH . '/app/modules/preview.php';
 
-    [$share, $node] = shares_resolve();
+    [$share, $node] = shares_resolve(true);
 
+    if (($share['permission'] ?? '') === 'inbox') {
+        http_response_code(403);
+        exit;
+    }
     if (!share_unlocked($share) || $node['kind'] !== 'file' || $node['blob_id'] === null) {
         http_response_code(403);
         exit;
@@ -414,45 +475,97 @@ function shares_raw(): void
     );
 }
 
-/** 上传到共享文件夹（分享权限为 upload 时） */
+/**
+ * 往分享目录里投递文件。
+ * 可上传（upload）与收取箱（inbox）共用这条通道，区别是收取箱有数量上限、
+ * 且投递者的署名会写进文件备注，方便主人知道「这是谁给的」。
+ */
 function shares_upload(): void
 {
-    [$share, $node] = shares_resolve();
+    [$share, $node] = share_upload_target();
 
-    if (!share_unlocked($share)) {
-        json_fail('需要提取密码。', 403, 'locked');
+    $isInbox = (string) $share['permission'] === 'inbox';
+    if ($isInbox && share_inbox_full($share)) {
+        json_fail('这个收取箱已经收满了。', 409, 'full');
     }
-    if ($share['permission'] !== 'upload') {
-        json_fail('该分享不允许上传。', 403, 'forbidden');
-    }
-    if ($node['kind'] !== 'folder') {
-        json_fail('只能往分享的文件夹里上传。', 400);
+    // 收满之前的最后一个名额也要抢：并发上传时两个请求都可能看到「还没满」，
+    // 所以先做一次带条件的自增，抢不到就直接拒绝，失败时再退回去。
+    if ($isInbox) {
+        $reserved = q_exec(
+            'UPDATE shares SET upload_count = upload_count + 1
+             WHERE id = ? AND status = ? AND (max_files IS NULL OR upload_count < max_files)',
+            [(int) $share['id'], 'active']
+        );
+        if ($reserved !== 1) {
+            json_fail('这个收取箱已经收满了。', 409, 'full');
+        }
     }
 
     $file = $_FILES['file'] ?? null;
     if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        if ($isInbox) {
+            q_exec('UPDATE shares SET upload_count = GREATEST(0, upload_count - 1) WHERE id = ?', [(int) $share['id']]);
+        }
         json_fail('没有收到文件，或上传出错。');
     }
 
     $ownerId = (int) $share['user_id'];
     $name = safe_filename((string) $file['name']);
     if ($name === null) {
+        if ($isInbox) {
+            q_exec('UPDATE shares SET upload_count = GREATEST(0, upload_count - 1) WHERE id = ?', [(int) $share['id']]);
+        }
         json_fail('文件名不合法。');
     }
 
     $size = (int) $file['size'];
+    if ($size > (int) config('max_upload')) {
+        if ($isInbox) {
+            q_exec('UPDATE shares SET upload_count = GREATEST(0, upload_count - 1) WHERE id = ?', [(int) $share['id']]);
+        }
+        json_fail('文件超过单文件上限 ' . format_bytes((float) config('max_upload')) . '。', 413);
+    }
+
     try {
         assert_quota($ownerId, $size);
     } catch (RuntimeException $e) {
+        if ($isInbox) {
+            q_exec('UPDATE shares SET upload_count = GREATEST(0, upload_count - 1) WHERE id = ?', [(int) $share['id']]);
+        }
         json_fail('分享者的存储空间不足。', 413, 'quota');
     }
 
-    $mime = mime_of($name, (string) @file_get_contents((string) $file['tmp_name'], false, null, 0, 12));
-    $blob = blob_ingest_file((string) $file['tmp_name'], null, $mime);
-    $created = node_create_file($ownerId, (int) $node['id'], $name, $blob, $mime);
+    try {
+        $mime = mime_of($name, (string) @file_get_contents((string) $file['tmp_name'], false, null, 0, 12));
+        $blob = blob_ingest_file((string) $file['tmp_name'], null, $mime);
+        $created = node_create_file($ownerId, (int) $node['id'], $name, $blob, $mime);
+    } catch (Throwable $e) {
+        if ($isInbox) {
+            q_exec('UPDATE shares SET upload_count = GREATEST(0, upload_count - 1) WHERE id = ?', [(int) $share['id']]);
+        }
+        json_fail('写入失败：' . $e->getMessage(), 500);
+    }
+
+    // 收取箱记下投递者，主人在文件详情里能看到来源
+    if ($isInbox) {
+        $sender = mb_substr(trim((string) ($_POST['sender'] ?? '')), 0, 40);
+        $message = mb_substr(trim((string) ($_POST['message'] ?? '')), 0, 300);
+        $note = '';
+        if ($sender !== '') {
+            $note = '来自：' . $sender;
+        }
+        if ($message !== '') {
+            $note .= ($note !== '' ? "\n" : '') . $message;
+        }
+        if ($note !== '') {
+            q_update('nodes', ['note' => $note], 'id = ?', [(int) $created['id']]);
+            $created['note'] = $note;
+        }
+    }
 
     share_visit((int) $share['id'], 'upload', (int) $created['id']);
-    activity_log($ownerId, 'file.upload', (int) $created['id'], $name . '（来自分享）');
+    activity_log($ownerId, 'file.upload', (int) $created['id'],
+        $name . ($isInbox ? '（收取箱）' : '（来自分享）'));
 
     if (str_starts_with($mime, 'image/')) {
         make_thumbnail(blob_path((string) $blob['hash']), (string) $blob['hash']);
@@ -462,5 +575,285 @@ function shares_upload(): void
         search_index_node($ownerId, $created);
     }
 
-    json_ok(['node' => node_public($created)]);
+    $fresh = $isInbox ? q_one('SELECT * FROM shares WHERE id = ?', [(int) $share['id']]) : null;
+
+    json_ok([
+        'node'     => node_public($created),
+        'uploads'  => $fresh !== null ? (int) $fresh['upload_count'] : null,
+        'maxFiles' => $fresh !== null && $fresh['max_files'] !== null ? (int) $fresh['max_files'] : null,
+        'full'     => $fresh !== null ? share_inbox_full($fresh) : false,
+    ]);
+}
+
+/** 投递前的公共校验：权限、目录、密码、收满 */
+function share_upload_target(bool $allowFull = true): array
+{
+    [$share, $node] = shares_resolve($allowFull);
+
+    if (!share_unlocked($share)) {
+        json_fail('需要提取密码。', 403, 'locked');
+    }
+    if (!in_array((string) $share['permission'], SHARE_UPLOAD_PERMISSIONS, true)) {
+        json_fail('该分享不允许上传。', 403, 'forbidden');
+    }
+    if ($node['kind'] !== 'folder') {
+        json_fail('只能往分享的文件夹里上传。', 400);
+    }
+
+    return [$share, $node];
+}
+
+/** 初始化分片会话（大文件走这条路，绕过 PHP 的 post_max_size） */
+function shares_upload_init(): void
+{
+    require_method('POST');
+    [$share, $node] = share_upload_target();
+
+    $isInbox = (string) $share['permission'] === 'inbox';
+    if ($isInbox && share_inbox_full($share)) {
+        json_fail('这个收取箱已经收满了。', 409, 'full');
+    }
+
+    $name = safe_filename((string) input('name', ''));
+    if ($name === null) {
+        json_fail('文件名不合法。');
+    }
+    $size = input_int('size');
+    if ($size < 0) {
+        json_fail('文件大小不合法。');
+    }
+    if ($size > (int) config('max_upload')) {
+        json_fail('文件超过单文件上限 ' . format_bytes((float) config('max_upload')) . '。', 413);
+    }
+
+    $ownerId = (int) $share['user_id'];
+    try {
+        assert_quota($ownerId, $size);
+    } catch (RuntimeException $e) {
+        json_fail('分享者的存储空间不足。', 413, 'quota');
+    }
+
+    // 名额在合并成功后才扣，所以初始化本身不消耗额度；这里单独挡一下
+    // 「开一堆会话却不传完」的占用磁盘行为。
+    $inflight = (int) q_val(
+        "SELECT COUNT(*) FROM upload_sessions
+         WHERE share_id = ? AND status IN ('pending','uploading') AND updated_at >= ?",
+        [(int) $share['id'], date('Y-m-d H:i:s', time() - 3600)]
+    );
+    if ($inflight >= 30) {
+        json_fail('同时进行的上传太多了，请稍后再试。', 429, 'too_many');
+    }
+
+    $chunkSize = (int) config('chunk_size');
+    $totalChunks = $size === 0 ? 1 : (int) ceil($size / $chunkSize);
+    $uploadId = bin2hex(random_bytes(16));
+
+    q_insert('upload_sessions', [
+        'user_id'        => $ownerId,
+        'upload_id'      => $uploadId,
+        'filename'       => $name,
+        'relative_path'  => null,
+        'size'           => $size,
+        'chunk_size'     => $chunkSize,
+        'total_chunks'   => $totalChunks,
+        'received'       => json_encode([]),
+        'received_bytes' => 0,
+        'parent_id'      => (int) $node['id'],
+        'source_id'      => null,
+        'share_id'       => (int) $share['id'],
+        'hash'           => null,
+        'status'         => 'pending',
+        'created_at'     => now(),
+        'updated_at'     => now(),
+    ]);
+
+    chunk_dir($uploadId);
+
+    json_ok([
+        'uploadId'    => $uploadId,
+        'chunkSize'   => $chunkSize,
+        'totalChunks' => $totalChunks,
+        'name'        => $name,
+    ]);
+}
+
+/** 收一个分片 */
+function shares_upload_chunk(): void
+{
+    require_once BASE_PATH . '/app/modules/upload.php';
+    require_method('POST');
+    [$share, $node] = share_upload_target();
+
+    $uploadId = preg_replace('/[^a-f0-9]/', '', (string) ($_SERVER['HTTP_X_UPLOAD_ID'] ?? '')) ?? '';
+    $index = (int) ($_SERVER['HTTP_X_CHUNK_INDEX'] ?? -1);
+
+    // 只认属于这条分享的会话：uploadId 泄给别人也换不到别的分享的会话
+    $session = q_one(
+        'SELECT * FROM upload_sessions WHERE upload_id = ? AND share_id = ? LIMIT 1',
+        [$uploadId, (int) $share['id']]
+    );
+    if ($session === null) {
+        json_fail('上传会话不存在或已过期。', 404, 'no_session');
+    }
+
+    try {
+        json_ok(upload_store_chunk($session, $index));
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 409, 'chunk_failed');
+    }
+}
+
+/** 合并分片并把文件交给主人 */
+function shares_upload_complete(): void
+{
+    require_once BASE_PATH . '/app/modules/upload.php';
+    require_method('POST');
+    [$share, $node] = share_upload_target();
+
+    $uploadId = preg_replace('/[^a-f0-9]/', '', (string) input('uploadId', '')) ?? '';
+    $session = q_one(
+        'SELECT * FROM upload_sessions WHERE upload_id = ? AND share_id = ? LIMIT 1',
+        [$uploadId, (int) $share['id']]
+    );
+    if ($session === null) {
+        json_fail('上传会话不存在或已过期。', 404, 'no_session');
+    }
+
+    $isInbox = (string) $share['permission'] === 'inbox';
+    $fresh = q_one('SELECT * FROM shares WHERE id = ?', [(int) $share['id']]);
+
+    // 已经合并过：直接回报，不重复建节点
+    if ((string) $session['status'] === 'done' && $session['node_id'] !== null) {
+        json_ok([
+            'name'     => (string) $session['filename'],
+            'uploads'  => $fresh !== null ? (int) $fresh['upload_count'] : null,
+            'maxFiles' => $fresh !== null && $fresh['max_files'] !== null ? (int) $fresh['max_files'] : null,
+            'full'     => $fresh !== null ? share_inbox_full($fresh) : false,
+        ]);
+    }
+
+    try {
+        $merged = upload_merge_chunks($session);
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 409, 'incomplete');
+    }
+
+    $size = (int) filesize($merged);
+    $ownerId = (int) $share['user_id'];
+
+    // 名额在合并成功后才扣：中途放弃的分片会话不会白占收取箱的额度
+    if ($isInbox) {
+        $reserved = q_exec(
+            'UPDATE shares SET upload_count = upload_count + 1
+             WHERE id = ? AND status = ? AND (max_files IS NULL OR upload_count < max_files)',
+            [(int) $share['id'], 'active']
+        );
+        if ($reserved !== 1) {
+            @unlink($merged);
+            json_fail('这个收取箱已经收满了。', 409, 'full');
+        }
+    }
+
+    try {
+        $mime = mime_of((string) $session['filename'], (string) @file_get_contents($merged, false, null, 0, 12));
+        $blob = blob_ingest_file($merged, null, $mime);
+        $created = node_create_file($ownerId, (int) $node['id'], (string) $session['filename'], $blob, $mime);
+    } catch (Throwable $e) {
+        if ($isInbox) {
+            q_exec('UPDATE shares SET upload_count = GREATEST(0, upload_count - 1) WHERE id = ?', [(int) $share['id']]);
+        }
+        json_fail('写入失败：' . $e->getMessage(), 500);
+    }
+
+    if ($isInbox) {
+        $sender = mb_substr(trim((string) input('sender', '')), 0, 40);
+        $message = mb_substr(trim((string) input('message', '')), 0, 300);
+        $note = '';
+        if ($sender !== '') {
+            $note = '来自：' . $sender;
+        }
+        if ($message !== '') {
+            $note .= ($note !== '' ? "\n" : '') . $message;
+        }
+        if ($note !== '') {
+            q_update('nodes', ['note' => $note], 'id = ?', [(int) $created['id']]);
+        }
+    }
+
+    share_visit((int) $share['id'], 'upload', (int) $created['id']);
+    activity_log($ownerId, 'file.upload', (int) $created['id'],
+        (string) $created['name'] . ($isInbox ? '（收取箱）' : '（来自分享）'));
+    traffic_add($ownerId, 'up', $size, 1);
+
+    q_update('upload_sessions', [
+        'status'     => 'done',
+        'node_id'    => (int) $created['id'],
+        'updated_at' => now(),
+    ], 'id = ?', [(int) $session['id']]);
+    chunk_remove_dir($uploadId);
+
+    if (str_starts_with($mime, 'image/')) {
+        make_thumbnail(blob_path((string) $blob['hash']), (string) $blob['hash']);
+    }
+    if (function_exists('search_index_node')) {
+        search_index_node($ownerId, $created);
+    }
+
+    $fresh = q_one('SELECT * FROM shares WHERE id = ?', [(int) $share['id']]);
+
+    json_ok([
+        'name'     => (string) $created['name'],
+        'size'     => $size,
+        'uploads'  => $fresh !== null ? (int) $fresh['upload_count'] : null,
+        'maxFiles' => $fresh !== null && $fresh['max_files'] !== null ? (int) $fresh['max_files'] : null,
+        'full'     => $fresh !== null ? share_inbox_full($fresh) : false,
+    ]);
+}
+
+/** 收取箱收到的文件（仅分享者本人可见） */
+function shares_received(): void
+{
+    $userId = require_auth_api();
+    $share = q_one('SELECT * FROM shares WHERE id = ? AND user_id = ?', [input_int('id'), $userId]);
+    if ($share === null) {
+        json_fail('分享不存在。', 404);
+    }
+
+    $rows = q_all(
+        'SELECT v.created_at, v.ip, n.id, n.name, n.size, n.ext, n.note
+         FROM share_visits v JOIN nodes n ON n.id = v.node_id
+         WHERE v.share_id = ? AND v.action = ? AND n.deleted_at IS NULL
+         ORDER BY v.id DESC LIMIT 200',
+        [(int) $share['id'], 'upload']
+    );
+
+    $items = array_map(static function (array $r): array {
+        $note = (string) ($r['note'] ?? '');
+        $sender = '';
+        $message = '';
+        if (str_starts_with($note, '来自：')) {
+            $lines = explode("\n", $note, 2);
+            $sender = mb_substr($lines[0], 3, 60);
+            $message = $lines[1] ?? '';
+        } else {
+            $message = $note;
+        }
+
+        return [
+            'id'        => (int) $r['id'],
+            'name'      => (string) $r['name'],
+            'size'      => (int) $r['size'],
+            'sizeText'  => format_bytes((float) $r['size']),
+            'when'      => time_ago((string) $r['created_at']),
+            'ip'        => (string) ($r['ip'] ?? ''),
+            'sender'    => $sender,
+            'message'   => $message,
+        ];
+    }, $rows);
+
+    json_ok([
+        'items' => $items,
+        'count' => count($items),
+        'share' => share_public($share),
+    ]);
 }

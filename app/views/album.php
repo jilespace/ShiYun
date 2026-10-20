@@ -13,6 +13,8 @@ if (!defined('BASE_PATH')) {
 /** @var bool $hasMore */
 /** @var int $total */
 /** @var array{used:int,total:int} $quota */
+/** @var string $camera */
+/** @var list<array{camera:string,c:int}> $cameras */
 ?>
 <div class="app" data-app data-section="album" data-page="album">
 
@@ -24,9 +26,22 @@ if (!defined('BASE_PATH')) {
         <div class="trail">
             <nav class="crumbs" aria-label="位置">
                 <span class="crumbs__here" aria-current="page">相册</span>
-                <span class="crumbs__note"><?= (int) $total ?> 张图片 · 按上传时间倒序</span>
+                <span class="crumbs__note"><?= (int) $total ?> 张图片 · 按拍摄时间倒序</span>
             </nav>
         </div>
+
+        <?php if ($cameras !== []): ?>
+            <div class="albfilter" aria-label="按机型筛选">
+                <a class="pill<?= $camera === '' ? ' pill--on' : '' ?>"
+                   href="<?= e(url('files.album')) ?>">全部机型</a>
+                <?php foreach ($cameras as $cam): ?>
+                    <a class="pill<?= $camera === (string) $cam['camera'] ? ' pill--on' : '' ?>"
+                       href="<?= e(url('files.album', ['camera' => (string) $cam['camera']])) ?>">
+                        <?= e((string) $cam['camera']) ?><span class="albfilter__n"><?= (int) $cam['c'] ?></span>
+                    </a>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
 
         <?php if ($groups === []): ?>
             <div class="listwrap">
@@ -41,7 +56,7 @@ if (!defined('BASE_PATH')) {
                 </div>
             </div>
         <?php else: ?>
-            <div class="listwrap alb" data-album>
+            <div class="listwrap alb" data-album data-camera="<?= e($camera) ?>">
                 <?php foreach ($groups as $month => $items): ?>
                     <section class="alb__group">
                         <h2 class="alb__month"><?= e((string) $month) ?><i><?= count($items) ?></i></h2>

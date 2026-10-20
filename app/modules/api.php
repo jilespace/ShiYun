@@ -308,6 +308,7 @@ function api_route_download(int $userId): void
     }
 
     activity_log($userId, 'file.download', (int) $node['id'], (string) $node['name']);
+    node_touch_access($userId, (int) $node['id']);
     traffic_add($userId, 'down', (int) $node['size'], 1);
 
     $mime = (string) ($node['mime'] ?? 'application/octet-stream');

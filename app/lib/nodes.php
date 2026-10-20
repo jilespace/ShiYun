@@ -629,6 +629,34 @@ function copy_node_row(int $userId, array $node, int $parentId, string $name): i
     return $id;
 }
 
+/* -------------------------------------------------------------- 访问时间 */
+
+/**
+ * 回收站根节点的路径前缀。删文件夹时只标记顶层节点，子节点靠这个前缀识别；
+ * 结果按用户缓存，避免一页里多次查同一条记录。
+ */
+function node_trash_prefix(int $userId): string
+{
+    static $cache = [];
+    if (!array_key_exists($userId, $cache)) {
+        $cache[$userId] = (string) q_val('SELECT path FROM nodes WHERE id = ?', [user_trash_id($userId)]);
+    }
+    return $cache[$userId];
+}
+
+/**
+ * 记录一次访问。同一条目一小时内只写一次——预览页刷新很频繁，
+ * 每次都 UPDATE 会让热点文件变成写放大。
+ */
+function node_touch_access(int $userId, int $nodeId): void
+{
+    q_exec(
+        'UPDATE nodes SET last_access_at = ?
+         WHERE id = ? AND user_id = ? AND (last_access_at IS NULL OR last_access_at < ?)',
+        [now(), $nodeId, $userId, date('Y-m-d H:i:s', time() - 3600)]
+    );
+}
+
 /* -------------------------------------------------------------- 回收站 */
 
 function node_trash(int $userId, array $node): void
