@@ -79,6 +79,8 @@ function activity_label(string $action): string
         'tag.detach'     => '移除标签',
         'share.create'   => '创建分享',
         'share.revoke'   => '取消分享',
+        'direct.create' => '创建直链',
+        'direct.revoke' => '作废直链',
         'share.download' => '分享下载',
         'archive.extract' => '在线解压',
         'archive.compress' => '压缩',

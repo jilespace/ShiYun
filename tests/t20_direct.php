@@ -315,4 +315,36 @@ check($linkCountT6 >= 3, '同一文件应能挂多条直链');
 check(direct_resolve($tkRev, '203.0.113.1')['ok'] === false, '被撤销的那条仍应拒绝');
 check(direct_resolve($tkOk, '203.0.113.1')['ok'] === true, '未被撤销的那条不受影响');
 
+// ------------------------------------------------------------- 路由与装载
+
+$router = (string) file_get_contents(BASE_PATH . '/app/router.php');
+check(str_contains($router, "'direct.serve'"), 'direct.serve 应登记进 PUBLIC_ROUTES');
+
+$boot = (string) file_get_contents(BASE_PATH . '/app/bootstrap.php');
+check(str_contains($boot, "lib/directs.php"), 'bootstrap 应装载 lib/directs.php');
+
+$mod = (string) file_get_contents(BASE_PATH . '/app/modules/direct.php');
+check(str_contains($mod, 'function direct_serve'), 'direct.php 应有 direct_serve');
+check(str_contains($mod, 'function direct_create'), 'direct.php 应有 direct_create');
+check(str_contains($mod, 'function direct_revoke'), 'direct.php 应有 direct_revoke');
+check(str_contains($mod, "require_method('POST')"), '写接口应限制 POST');
+check(str_contains($mod, 'require_csrf()'), '写接口应校验 CSRF');
+check(str_contains($mod, "'Allow: GET, HEAD'"), 'serve 应声明 Allow 头');
+check(str_contains($mod, 'mime_inline_ok($mime)'), 'serve 应用内联白名单决定 disposition');
+
+// 直链绝不写操作日志（视频拖动进度条会高频命中）。
+// 不能整文件扫 activity_log——direct_create / direct_revoke 是正当要写的，
+// 只有 direct_serve 不能写。所以切出 direct_serve 的函数体再查。
+$serveStart = strpos($mod, 'function direct_serve');
+$serveEnd = strpos($mod, 'function direct_create');
+check($serveStart !== false && $serveEnd !== false && $serveEnd > $serveStart,
+    'direct.php 应含 direct_serve 且其后的 direct_create');
+$serveBody = substr($mod, (int) $serveStart, (int) $serveEnd - (int) $serveStart);
+check(!str_contains($serveBody, 'activity_log'), 'direct_serve 不得写 activity_log');
+
+// activity_label 覆盖新动作
+$act = (string) file_get_contents(BASE_PATH . '/app/lib/activity.php');
+check(str_contains($act, "'direct.create'"), 'activity_label 应覆盖 direct.create');
+check(str_contains($act, "'direct.revoke'"), 'activity_label 应覆盖 direct.revoke');
+
 finish();

@@ -27,6 +27,7 @@ const PUBLIC_ROUTES = [
     'shares.upload',
     'shares.browse',
     'shares.raw',
+    'direct.serve',
     'rss.feed',
     'webdav.handle',
     'api.handle',
