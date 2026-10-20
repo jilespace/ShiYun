@@ -92,6 +92,30 @@ function db_migrate(PDO $pdo): void
         $pdo->exec('ALTER TABLE nodes DROP COLUMN source_id');
     }
 
+    // TOTP 两步验证：密钥与启用标记
+    $userCols = array_column($pdo->query('SHOW COLUMNS FROM users')->fetchAll(), 'Field');
+    if (!in_array('totp_secret', $userCols, true)) {
+        $pdo->exec('ALTER TABLE users ADD COLUMN totp_secret VARCHAR(64) NULL AFTER private_hash');
+    }
+    if (!in_array('totp_enabled', $userCols, true)) {
+        $pdo->exec('ALTER TABLE users ADD COLUMN totp_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER totp_secret');
+    }
+
+    // activities / login_logs 的 created_at 索引：定时清理按时间删，否则每分钟全表扫
+    foreach (['activities' => 'idx_act_created', 'login_logs' => 'idx_login_created'] as $tbl => $idxName) {
+        $cols = array_column($pdo->query('SHOW INDEX FROM ' . $tbl)->fetchAll(), 'Key_name');
+        if (!in_array($idxName, $cols, true)) {
+            $pdo->exec('ALTER TABLE ' . $tbl . ' ADD INDEX ' . $idxName . ' (created_at)');
+        }
+    }
+
+    // nodes(user_id, created_at)：让相册的「按上传时间倒序 + LIMIT」走索引而不是 filesort。
+    // CREATE TABLE IF NOT EXISTS 不会给已存在的表补索引，所以这里单独判断一次。
+    $nodeIdx = array_column($pdo->query('SHOW INDEX FROM nodes')->fetchAll(), 'Key_name');
+    if (!in_array('idx_node_created', $nodeIdx, true)) {
+        $pdo->exec('ALTER TABLE nodes ADD INDEX idx_node_created (user_id, created_at)');
+    }
+
     $pdo->prepare('INSERT INTO app_meta (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v)')
         ->execute(['schema_version', (string) SCHEMA_VERSION]);
 }

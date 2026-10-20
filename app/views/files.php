@@ -11,6 +11,9 @@ if (!defined('BASE_PATH')) {
 /** @var array $settings */
 /** @var array $folder */
 /** @var list<array> $children */
+/** @var bool $hasMore */
+/** @var int $nextOffset */
+/** @var array{folders:int,files:int,bytes:int} $childStats */
 /** @var list<array> $crumbs */
 /** @var list<array> $tags */
 /** @var string $section */
@@ -134,7 +137,7 @@ if (!$isTrash) {
 ?>
 <div class="app" data-app data-section="<?= e($section) ?>" data-view="<?= e($viewMode) ?>"
      data-folder="<?= (int) $folder['id'] ?>" data-sort="<?= e($opts['sort']) ?>" data-dir="<?= e($opts['dir']) ?>"
-     data-show-hidden="<?= $showHidden ? '1' : '0' ?>">
+     data-show-hidden="<?= $showHidden ? '1' : '0' ?>" data-page-size="<?= (int) $pageSize ?>">
 
     <?php view('partials/spine', ['section' => $section, 'user' => $user, 'quota' => $quota]) ?>
 
@@ -251,13 +254,23 @@ if (!$isTrash) {
             </ul>
 
             <div class="listfoot" data-listfoot<?= $children === [] ? ' hidden' : '' ?>>
-                <span data-listfoot-text><?php
-                    $folderCount = count(array_filter($children, static fn (array $c): bool => $c['kind'] === 'folder'));
-                    $fileCount = count($children) - $folderCount;
-                    $bytes = array_sum(array_map(static fn (array $c): int => $c['kind'] === 'file' ? (int) $c['size'] : 0, $children));
-                    echo e(sprintf('%d 个文件夹 · %d 个文件 · 合计 %s', $folderCount, $fileCount, format_bytes((float) $bytes)));
-                ?></span>
+                <span data-listfoot-text><?= e(sprintf(
+                    '%d 个文件夹 · %d 个文件 · 合计 %s',
+                    (int) $childStats['folders'],
+                    (int) $childStats['files'],
+                    format_bytes((float) $childStats['bytes'])
+                )) ?></span>
+                <?php if ($hasMore): ?>
+                    <span class="listfoot__more">已显示前 <?= count($children) ?> 项，继续下拉加载更多</span>
+                <?php endif; ?>
             </div>
+
+            <?php if ($hasMore): ?>
+                <?php /* 哨兵：进入视口就按 offset 续取下一页，避免一次性渲染整个大目录 */ ?>
+                <div class="listmore" data-listmore data-next="<?= (int) $nextOffset ?>">
+                    <span class="listmore__hint">继续下拉加载更多</span>
+                </div>
+            <?php endif; ?>
 
             <div class="void" data-void<?= $children === [] ? '' : ' hidden' ?>>
                 <span class="void__glyph"><?= lucide($isTrash ? 'trash-2' : ($isFav ? 'star' : 'folder-open'), 'void__ico') ?></span>

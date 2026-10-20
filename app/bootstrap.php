@@ -45,6 +45,7 @@ require BASE_PATH . '/app/lib/ooxml.php';
 require BASE_PATH . '/app/lib/archive.php';
 require BASE_PATH . '/app/lib/search.php';
 require BASE_PATH . '/app/lib/qr.php';
+require BASE_PATH . '/app/lib/totp.php';
 require BASE_PATH . '/app/lib/shares.php';
 require BASE_PATH . '/app/lib/versions.php';
 require BASE_PATH . '/app/lib/api.php';

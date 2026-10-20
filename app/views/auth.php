@@ -62,7 +62,7 @@ $reveal = static function (string $id, string $name, string $autocomplete, strin
         . '</button></span>';
 };
 
-$isRecovery = in_array($tab, ['forgot', 'reset'], true);
+$isStepAside = in_array($tab, ['forgot', 'reset', 'totp'], true);
 ?>
 <div class="rail" aria-hidden="true"><span>云端归档 · ARCHIVE <?= date('Y') ?></span></div>
 
@@ -101,9 +101,11 @@ $isRecovery = in_array($tab, ['forgot', 'reset'], true);
         </div>
 
         <aside class="dock" data-dock>
-            <?php if ($isRecovery): ?>
+            <?php if ($isStepAside): ?>
                 <div class="tabs tabs--plain">
-                    <a class="tab" href="<?= e(url('auth.login')) ?>"><?= lucide('arrow-left', 'tab__ico') ?>返回登录</a>
+                    <a class="tab" href="<?= e(url('auth.login')) ?>">
+                        <?= lucide('arrow-left', 'tab__ico') ?>返回登录
+                    </a>
                 </div>
             <?php else: ?>
                 <div class="tabs" role="tablist" data-tabs data-active="<?= e($tab) ?>">
@@ -337,6 +339,38 @@ $isRecovery = in_array($tab, ['forgot', 'reset'], true);
                 <?php else: ?>
                     <p class="pane__foot"><a href="<?= e(url('auth.forgot')) ?>">重新申请一条重设链接</a></p>
                 <?php endif; ?>
+            </div>
+            <?php endif; ?>
+            <?php if ($tab === 'totp'): ?>
+            <div class="pane" data-pane="totp">
+                <h2 class="pane__title">两步验证</h2>
+                <p class="pane__sub">
+                    账号已开启两步验证<?= isset($values['account']) && $values['account'] !== '' ? '（' . e($values['account']) . '）' : '' ?>。
+                    打开认证器，输入当前的 6 位验证码。认证器丢失时，也可以填入其中一个一次性恢复码。
+                </p>
+
+                <?= $alert($errors['form'] ?? null) ?>
+
+                <form class="form" method="post" action="<?= e(url('auth.totp')) ?>" novalidate>
+                    <?= csrf_field() ?>
+
+                    <label class="fld">
+                        <span class="fld__label">验证码</span>
+                        <span class="fld__box">
+                            <span class="fld__ico"><?= lucide('shield-check') ?></span>
+                            <input class="fld__in" name="code" type="text" inputmode="numeric"
+                                   pattern="[0-9 ]*" maxlength="6" autocomplete="one-time-code" required
+                                   placeholder="6 位数字" autofocus data-otp-input>
+                        </span>
+                    </label>
+
+                    <button class="cta" data-magnetic type="submit">
+                        <span class="cta__label">验证并登录</span>
+                        <span class="cta__ico"><?= lucide('arrow-right') ?></span>
+                    </button>
+                </form>
+
+                <p class="pane__foot">不是你的设备？<a href="<?= e(url('auth.login')) ?>">返回重新登录</a></p>
             </div>
             <?php endif; ?>
         </aside>

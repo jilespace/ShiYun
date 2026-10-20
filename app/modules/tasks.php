@@ -339,7 +339,36 @@ function tasks_cron(): void
         'users'     => count($userIds),
         'swept'     => tasks_sweep_uploads(),
         'trash'     => tasks_sweep_trash(),
+        'logs'      => tasks_sweep_logs(),
     ]);
+}
+
+/**
+ * 清理过期日志。
+ *
+ * activities 每打开一次文件就写一行、login_logs 每次登录尝试也写一行，
+ * 而此前没有任何清理逻辑——只增不减。日志是排查用的，留够窗口就够，
+ * 没必要永久保存每一行（设置页的日志标签也会越翻越慢）。
+ *
+ * 删除按 created_at 走索引分批进行，避免每分钟的定时任务做一次全表扫描。
+ *
+ * @return array{activities:int,logins:int}
+ */
+function tasks_sweep_logs(): array
+{
+    $activityDays = max(7, (int) config('activity_retention_days', 90));
+    $loginDays = max(30, (int) config('login_log_retention_days', 365));
+
+    $activities = q_exec(
+        'DELETE FROM activities WHERE created_at < ? LIMIT 2000',
+        [date('Y-m-d H:i:s', time() - $activityDays * 86400)]
+    );
+    $logins = q_exec(
+        'DELETE FROM login_logs WHERE created_at < ? LIMIT 2000',
+        [date('Y-m-d H:i:s', time() - $loginDays * 86400)]
+    );
+
+    return ['activities' => $activities, 'logins' => $logins];
 }
 
 /**

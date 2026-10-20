@@ -160,6 +160,65 @@ function preview_text(): void
     ]);
 }
 
+/** 保存文本 / Markdown 编辑（旧内容自动留档为版本） */
+function preview_save(): void
+{
+    require_method('POST');
+    $userId = require_auth_api();
+    require_csrf();
+
+    $node = node_require($userId, input_int('id'));
+
+    if ($node['kind'] !== 'file' || $node['blob_id'] === null) {
+        json_fail('只有文件才能编辑。', 404);
+    }
+    if (node_in_private($userId, $node) && !Auth::privateUnlocked()) {
+        json_fail('私密空间已锁定。', 403, 'private_locked');
+    }
+    if (!is_textual((string) $node['mime'], (string) $node['ext'])) {
+        json_fail('这类文件不支持在线编辑。', 415, 'unsupported');
+    }
+
+    $content = (string) input('content', '');
+    if ($content === '') {
+        json_fail('内容为空；要清空请至少保留一个字符。');
+    }
+    $cap = 2 * 1024 * 1024;
+    if (strlen($content) > $cap) {
+        json_fail('编辑内容超过 2 MB 上限，请下载后用本地软件处理。', 413, 'too_large');
+    }
+
+    // 走临时文件复用内容寻址入库；默认 UTF-8，不带 BOM
+    $tmp = tempnam((string) config('chunk_path'), 'edit');
+    if ($tmp === false || file_put_contents($tmp, $content) === false) {
+        json_fail('写入临时文件失败。', 500, 'io');
+    }
+
+    try {
+        $blob = blob_ingest_file($tmp, null, (string) ($node['mime'] ?? 'text/plain'));
+    } catch (RuntimeException $e) {
+        @unlink($tmp);
+        json_fail('保存失败：' . $e->getMessage(), 500, 'io');
+    }
+
+    $updated = node_replace_content($userId, $node, $blob);
+
+    // 与上传路径（upload.php 覆盖上传）保持一致：两者都必须做这两件事。
+    // 少了 versions_prune，每次编辑都留一条版本，改得越多堆得越狠（版本还持有 blob 引用）；
+    // 少了 search_index_node，全文索引仍停在旧内容上——搜得到已删掉的词，搜不到新写的词。
+    versions_prune($userId, (int) $updated['id'], 10);
+    search_index_node($userId, $updated);
+
+    activity_log($userId, 'file.edit', (int) $node['id'], (string) $node['name']);
+
+    json_ok([
+        'id'        => (int) $updated['id'],
+        'size'      => (int) $updated['size'],
+        'sizeText'  => format_bytes((float) $updated['size']),
+        'updated'   => (string) $updated['updated_at'],
+    ]);
+}
+
 /** Office 文档转 HTML（纯 PHP 解析 OOXML） */
 function preview_office(): void
 {

@@ -49,6 +49,40 @@ function node_require(int $userId, int $id): array
  */
 function node_children(int $userId, int $parentId, array $opts = []): array
 {
+    return node_attach_meta($userId, node_children_rows($userId, $parentId, $opts));
+}
+
+/**
+ * 分页列目录：返回 [rows, hasMore]。
+ *
+ * 单独开一个入口，而不是让 node_children 按参数返回两种形状——
+ * 那样每个调用方都得先判断拿到的是数组还是结构，很容易漏。
+ *
+ * @return array{0:list<array>,1:bool}
+ */
+function node_children_page(int $userId, int $parentId, array $opts = [], int $limit = 300, int $offset = 0): array
+{
+    $limit = max(1, $limit);
+
+    // 多取一条即可判断还有没有下一页，省掉一次 COUNT
+    $rows = node_children_rows($userId, $parentId, $opts, $limit + 1, $offset);
+
+    $hasMore = count($rows) > $limit;
+    if ($hasMore) {
+        array_pop($rows);
+    }
+
+    return [node_attach_meta($userId, $rows), $hasMore];
+}
+
+/**
+ * 目录查询的公共部分：排序、过滤，可选取前多少条。
+ *
+ * @param array{sort?:string,dir?:string,showHidden?:bool,type?:?string,q?:?string} $opts
+ * @return list<array> 未经 node_attach_meta 补全的原始行
+ */
+function node_children_rows(int $userId, int $parentId, array $opts = [], ?int $limit = null, int $offset = 0): array
+{
     $sort = NODE_SORTS[$opts['sort'] ?? 'name'] ?? NODE_SORTS['name'];
     $dir = strtolower((string) ($opts['dir'] ?? 'asc')) === 'desc' ? 'DESC' : 'ASC';
     $showHidden = (bool) ($opts['showHidden'] ?? false);
@@ -72,9 +106,13 @@ function node_children(int $userId, int $parentId, array $opts = []): array
     $sql = 'SELECT n.* FROM nodes n WHERE ' . implode(' AND ', $where)
         . " ORDER BY (n.kind = 'folder') DESC, {$sort} {$dir}, n.id ASC";
 
-    $rows = q_all($sql, $params);
-    return node_attach_meta($userId, $rows);
+    if ($limit !== null) {
+        $sql .= ' LIMIT ' . $limit . ' OFFSET ' . max(0, $offset);
+    }
+
+    return q_all($sql, $params);
 }
+
 
 /** 回收站顶层条目（按删除时间倒序） */
 function node_trash_list(int $userId): array
@@ -106,37 +144,42 @@ function node_attach_meta(int $userId, array $rows): array
     }
 
     $ids = array_map(static fn (array $r): int => (int) $r['id'], $rows);
-    $in = implode(',', array_fill(0, count($ids), '?'));
 
+    // 分批取元信息：IN (...) 的占位符数量等于条目数，目录一大单条语句就会超出
+    // max_allowed_packet，占位符太多也更容易把连接打满。
     $tagMap = [];
-    foreach (q_all(
-        "SELECT nt.node_id, t.id, t.name, t.color FROM node_tags nt
-         JOIN tags t ON t.id = nt.tag_id
-         WHERE nt.node_id IN ({$in}) AND t.user_id = ?",
-        [...$ids, $userId]
-    ) as $row) {
-        $tagMap[(int) $row['node_id']][] = [
-            'id'    => (int) $row['id'],
-            'name'  => (string) $row['name'],
-            'color' => (string) $row['color'],
-        ];
-    }
-
     $sharedMap = [];
-    foreach (q_all(
-        "SELECT node_id, COUNT(*) AS c FROM shares
-         WHERE node_id IN ({$in}) AND user_id = ? AND status = 'active' GROUP BY node_id",
-        [...$ids, $userId]
-    ) as $row) {
-        $sharedMap[(int) $row['node_id']] = (int) $row['c'];
-    }
-
     $memberMap = [];
-    foreach (q_all(
-        "SELECT node_id, COUNT(*) AS c FROM folder_members WHERE node_id IN ({$in}) GROUP BY node_id",
-        $ids
-    ) as $row) {
-        $memberMap[(int) $row['node_id']] = (int) $row['c'];
+    foreach (array_chunk($ids, 400) as $chunk) {
+        $in = implode(',', array_fill(0, count($chunk), '?'));
+
+        foreach (q_all(
+            "SELECT nt.node_id, t.id, t.name, t.color FROM node_tags nt
+             JOIN tags t ON t.id = nt.tag_id
+             WHERE nt.node_id IN ({$in}) AND t.user_id = ?",
+            [...$chunk, $userId]
+        ) as $row) {
+            $tagMap[(int) $row['node_id']][] = [
+                'id'    => (int) $row['id'],
+                'name'  => (string) $row['name'],
+                'color' => (string) $row['color'],
+            ];
+        }
+
+        foreach (q_all(
+            "SELECT node_id, COUNT(*) AS c FROM shares
+             WHERE node_id IN ({$in}) AND user_id = ? AND status = 'active' GROUP BY node_id",
+            [...$chunk, $userId]
+        ) as $row) {
+            $sharedMap[(int) $row['node_id']] = (int) $row['c'];
+        }
+
+        foreach (q_all(
+            "SELECT node_id, COUNT(*) AS c FROM folder_members WHERE node_id IN ({$in}) GROUP BY node_id",
+            $chunk
+        ) as $row) {
+            $memberMap[(int) $row['node_id']] = (int) $row['c'];
+        }
     }
 
     // 副本状态同样一次批量取回（同一份内容可能被多个节点引用，按 blob_id 归并）
@@ -149,17 +192,17 @@ function node_attach_meta(int $userId, array $rows): array
     }
 
     $cosMap = [];
-    if ($blobIds !== []) {
-        $blobIds = array_values($blobIds);
-        $blobIn = implode(',', array_fill(0, count($blobIds), '?'));
-        // 必须按 storage_sources.user_id 过滤：blobs 跨用户去重，不过滤的话，
-        // 别人的源的状态会显示在你的文件上，cosSourceId 还会泄漏别人的源 id。
+    // 必须按 storage_sources.user_id 过滤：blobs 跨用户去重，不过滤的话，
+    // 别人的源的状态会显示在你的文件上，cosSourceId 还会泄漏别人的源 id。
+    foreach (array_chunk(array_values($blobIds), 400) as $blobChunk) {
+        $blobIn = implode(',', array_fill(0, count($blobChunk), '?'));
+
         foreach (q_all(
             "SELECT bl.blob_id, bl.source_id, bl.status
              FROM blob_locations bl
              JOIN storage_sources s ON s.id = bl.source_id
              WHERE bl.blob_id IN ({$blobIn}) AND s.user_id = ?",
-            [...$blobIds, $userId]
+            [...$blobChunk, $userId]
         ) as $row) {
             $bid = (int) $row['blob_id'];
             $status = (string) $row['status'];
@@ -184,6 +227,37 @@ function node_attach_meta(int $userId, array $rows): array
     unset($row);
 
     return $rows;
+}
+
+/**
+ * 某目录直属子项的汇总（文件夹数 / 文件数 / 字节）。
+ * 分页之后页脚不能再拿当前页去加总，否则数字会随翻页变化。
+ *
+ * @return array{folders:int,files:int,bytes:int}
+ */
+function node_child_stats(int $userId, int $parentId, bool $showHidden = false): array
+{
+    $where = ['user_id = ?', 'parent_id = ?', 'deleted_at IS NULL'];
+    $params = [$userId, $parentId];
+
+    if (!$showHidden) {
+        $where[] = 'is_hidden = 0';
+    }
+
+    $row = q_one(
+        'SELECT
+            COALESCE(SUM(kind = \'folder\'), 0) AS folders,
+            COALESCE(SUM(kind = \'file\'), 0)   AS files,
+            COALESCE(SUM(IF(kind = \'file\', size, 0)), 0) AS bytes
+         FROM nodes WHERE ' . implode(' AND ', $where),
+        $params
+    );
+
+    return [
+        'folders' => (int) ($row['folders'] ?? 0),
+        'files'   => (int) ($row['files'] ?? 0),
+        'bytes'   => (int) ($row['bytes'] ?? 0),
+    ];
 }
 
 /** 面包屑：从根到当前节点 */

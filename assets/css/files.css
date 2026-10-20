@@ -1653,3 +1653,39 @@ body.is-app {
 .badge--cos {
     background: rgba(244, 242, 236, 0.06);
 }
+
+/* 大目录分页：哨兵与页脚提示 */
+.listfoot__more {
+    color: var(--dim-2);
+    font-size: 0.78rem;
+}
+
+.listmore {
+    display: flex;
+    justify-content: center;
+    padding: 22px 0 6px;
+}
+
+.listmore__hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 0.78rem;
+    color: var(--dim-2);
+}
+
+.listmore.is-loading .listmore__hint::before {
+    content: "";
+    width: 13px;
+    height: 13px;
+    border: 2px solid var(--line-2);
+    border-top-color: var(--signal-2);
+    border-radius: 50%;
+    animation: listmore-spin 0.8s linear infinite;
+}
+
+@keyframes listmore-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

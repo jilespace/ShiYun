@@ -57,6 +57,103 @@
     const cardsHost = $('[data-cards]');
     const voidHost = $('[data-void]');
     const listHead = $('[data-listhead]');
+    const listFootEl = $('[data-listfoot]');
+
+    const pageSize = () => Number(app.dataset.pageSize) || 300;
+
+    /* ── 大目录分页 ──
+       首屏只渲染服务端给的一页，其余靠「加载更多」哨兵按 offset 续取。
+       此前是整个目录一次查完并渲染成 HTML，上万条的目录会把响应和元信息
+       IN (...) 查询一起撑爆。 */
+
+    let moreIo = null;
+    let loadingMore = false;
+
+    /** 哨兵进入视口就续取下一页 */
+    function observeMore(el) {
+        if (!('IntersectionObserver' in window)) return;
+        if (!moreIo) {
+            moreIo = new IntersectionObserver((entries) => {
+                entries.forEach((entry) => {
+                    if (entry.isIntersecting && entry.target.isConnected) loadMore();
+                });
+            }, { rootMargin: '400px 0px' });
+        }
+        moreIo.disconnect();
+        moreIo.observe(el);
+    }
+
+    /** 维护哨兵：有下一页就放一个，否则移除 */
+    function syncMore(hasMore, offset) {
+        let sentinel = $('[data-listmore]');
+
+        if (!hasMore) {
+            if (sentinel) sentinel.remove();
+            return;
+        }
+
+        if (!sentinel) {
+            sentinel = document.createElement('div');
+            sentinel.className = 'listmore';
+            sentinel.setAttribute('data-listmore', '');
+            sentinel.innerHTML = '<span class="listmore__hint">继续下拉加载更多</span>';
+            if (listFootEl && listFootEl.parentNode) {
+                listFootEl.parentNode.insertBefore(sentinel, listFootEl.nextSibling);
+            } else {
+                listHead.parentNode.appendChild(sentinel);
+            }
+        }
+
+        sentinel.dataset.next = String(offset);
+        observeMore(sentinel);
+    }
+
+    /** 追加一页：不清空已选、不重建整个列表 */
+    function appendList(nodes) {
+        if (!nodes || !nodes.length) return;
+
+        const base = rowsHost.children.length;
+        nodes.forEach((n) => state.nodes.set(n.id, n));
+
+        rowsHost.insertAdjacentHTML('beforeend', nodes.map((n, i) => rowHtml(n, i + base)).join(''));
+        cardsHost.insertAdjacentHTML('beforeend', nodes.map((n, i) => cardHtml(n, i + base)).join(''));
+
+        voidHost.hidden = true;
+        listHead.style.display = '';
+        if (listFootEl) listFootEl.hidden = false;
+
+        const hint = document.querySelector('.listfoot__more');
+        if (hint) hint.textContent = '已显示前 ' + (base + nodes.length) + ' 项，继续下拉加载更多';
+    }
+
+    async function loadMore() {
+        const sentinel = $('[data-listmore]');
+        if (!sentinel || loadingMore) return;
+
+        loadingMore = true;
+        sentinel.classList.add('is-loading');
+
+        try {
+            const data = await api('files.data', {
+                folder: state.folder,
+                section: state.section,
+                sort: state.sort,
+                dir: state.dir,
+                type: 'all',
+                offset: Number(sentinel.dataset.next) || 0,
+                limit: pageSize(),
+            }, { method: 'GET' });
+
+            appendList(data.children || []);
+            syncMore(!!data.hasMore, rowsHost.children.length);
+        } catch (err) {
+            const hint = sentinel.querySelector('.listmore__hint');
+            if (hint) hint.textContent = err.message + ' · 上滑重试';
+        } finally {
+            sentinel.classList.remove('is-loading');
+            loadingMore = false;
+        }
+    }
 
     function nodeHref(n) {
         return n.kind === 'folder'
@@ -214,12 +311,15 @@
         listHead.style.opacity = '0.4';
 
         try {
+            // offset: 0 走分页分支：大目录只渲染首页，其余交给哨兵续取
             const data = await api('files.data', {
                 folder: folderId,
                 section: state.section,
                 sort: state.sort,
                 dir: state.dir,
                 type: 'all',
+                offset: 0,
+                limit: pageSize(),
             }, { method: 'GET' });
 
             if (seq !== loadSeq) return;   // 已有更新的请求，本次结果作废
@@ -227,6 +327,7 @@
             state.folder = folderId;
             app.dataset.folder = String(folderId);
             renderList(data.children);
+            syncMore(!!data.hasMore, data.children.length);
 
             // 收藏与回收站没有层级，路径栏保持静态
             if (state.section === 'files') {

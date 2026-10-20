@@ -37,6 +37,12 @@ $backUrl = $parent !== null && $parent['kind'] === 'folder'
                 <button class="iconbtn" type="button" data-zoom-in aria-label="放大"><?= lucide('plus') ?></button>
                 <span class="viewer__rule"></span>
             <?php endif; ?>
+            <?php if ($mode === 'text' && is_textual((string) $node['mime'], (string) $node['ext']) && (int) $node['size'] <= 2 * 1024 * 1024): ?>
+                <button class="iconbtn" type="button" data-edit aria-label="在线编辑" title="在线编辑">
+                    <?= lucide('pencil') ?>
+                </button>
+                <span class="viewer__rule"></span>
+            <?php endif; ?>
             <button class="iconbtn" type="button" data-info aria-label="详细信息"><?= lucide('info') ?></button>
             <a class="iconbtn" href="<?= e(url('download.file', ['id' => (int) $node['id']])) ?>" aria-label="下载">
                 <?= lucide('download') ?>

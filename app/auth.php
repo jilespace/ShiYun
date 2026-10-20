@@ -87,7 +87,9 @@ final class Auth
 function require_auth(): void
 {
     if (!Auth::check() || Auth::user() === null) {
-        redirect(url('login'));
+        // 必须打到 auth.login 这个真实存在的路由；写成 url('login') 会因为没有
+        // 点号被 route_parse 判成空路由，最终把人送回官网首页而不是登录页。
+        redirect(url('auth.login'));
     }
 }
 
@@ -95,7 +97,7 @@ function current_user(): array
 {
     $user = Auth::user();
     if ($user === null) {
-        redirect(url('login'));
+        redirect(url('auth.login'));
     }
     return $user;
 }

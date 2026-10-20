@@ -344,6 +344,255 @@
                 }
             }
         });
+
+        /* ── 存储桶管理 ── */
+
+        const bucketPanel = document.querySelector('[data-bucket-panel]');
+        const bucketHost = document.querySelector('[data-bucket-host]');
+
+        if (bucketPanel && bucketHost) {
+            const accountSel = document.querySelector('[data-bucket-account]');
+            const currentSource = () => Number(accountSel.value) || 0;
+            let openedBucket = '';
+            let refreshObjects = null;
+
+            function bucketTable(data) {
+                if (!data.buckets.length) {
+                    return '<div class="blank">' + icon('database')
+                        + '<p class="blank__title">这个账号下还没有桶</p>'
+                        + '<p class="blank__hint">点右上角「新建桶」建一个，建完就能一键绑定成存储源。</p></div>';
+                }
+
+                return '<div class="tblwrap"><table class="tbl"><thead><tr>'
+                    + '<th>桶名</th><th>地域</th><th>创建时间</th><th>绑定</th><th>操作</th>'
+                    + '</tr></thead><tbody>'
+                    + data.buckets.map((b) => {
+                        const name = escapeHtml(b.name);
+                        const bindCell = b.bound
+                            ? '<span class="pill">' + escapeHtml(b.boundBy) + '</span>'
+                            : '<span class="muted">未绑定</span>';
+                        // 「查看内容」恒可用；绑定中的桶不给删改入口——桶内对象正是本地仓的副本记录
+                        const acts = '<button class="chipbtn" type="button" data-bucket-peek="' + name + '">查看内容</button>'
+                            + (b.bound
+                                ? '<span class="muted">使用中，不可删改</span>'
+                                : '<button class="chipbtn" type="button" data-bucket-bind="' + name + '">绑定为存储源</button>'
+                                    + '<button class="chipbtn chipbtn--danger" type="button" data-bucket-del="' + name + '">删除</button>');
+
+                        return '<tr>'
+                            + '<td><div class="tbl__name">' + icon('database') + '<span>' + name + '</span></div></td>'
+                            + '<td class="muted">' + escapeHtml(b.region || '—') + '</td>'
+                            + '<td class="muted">' + escapeHtml(b.created ? b.created.slice(0, 10) : '—') + '</td>'
+                            + '<td>' + bindCell + '</td>'
+                            + '<td><div class="tbl__acts">' + acts + '</div></td>'
+                            + '</tr>';
+                    }).join('')
+                    + '</tbody></table></div>';
+            }
+
+            function bucketError(message) {
+                return '<div class="blank">' + icon('alert-triangle')
+                    + '<p class="blank__title">读不到桶列表</p>'
+                    + '<p class="blank__hint">' + escapeHtml(message) + '</p></div>';
+            }
+
+            async function loadBuckets() {
+                bucketHost.innerHTML = '<div class="blank">' + icon('loader')
+                    + '<p class="blank__hint">正在读取桶列表…</p></div>';
+                try {
+                    const data = await api('sources.buckets', { source: currentSource() }, { method: 'GET' });
+                    bucketHost.innerHTML = bucketTable(data);
+                } catch (err) {
+                    bucketHost.innerHTML = bucketError(err.message);
+                }
+            }
+
+            // 列桶要真打一次对象存储。页面上不看这块就不该付这个代价，所以只在
+            // 面板进入视口后才加载；不支持 IntersectionObserver 时退回立即加载。
+            let loaded = false;
+            const loadOnce = () => {
+                if (loaded) return;
+                loaded = true;
+                loadBuckets();
+            };
+            if ('IntersectionObserver' in window) {
+                const io = new IntersectionObserver((entries) => {
+                    for (const entry of entries) {
+                        if (entry.isIntersecting) {
+                            loadOnce();
+                            io.disconnect();
+                        }
+                    }
+                }, { rootMargin: '200px' });
+                io.observe(bucketPanel);
+            } else {
+                loadOnce();
+            }
+
+            accountSel?.addEventListener('change', () => {
+                loaded = true;
+                loadBuckets();
+            });
+            document.querySelector('[data-bucket-reload]')?.addEventListener('click', () => {
+                loaded = true;
+                loadBuckets();
+            });
+
+            document.querySelector('[data-bucket-new]')?.addEventListener('click', async () => {
+                const name = await SY.prompt('新建存储桶', '桶名', '', '小写字母、数字、- 与 .，3–63 位');
+                if (name === null) return;
+                try {
+                    const r = await api('sources.bucket_create', { source: currentSource(), bucket: name.trim() });
+                    toast(r.message || '桶已创建');
+                    loaded = true;
+                    loadBuckets();
+                } catch (err) {
+                    toast(err.message, 'err');
+                }
+            });
+
+            /* 桶内对象：查看 / 删单个 / 清空 */
+
+            async function renderObjects() {
+                const body = $('[data-modal-body]');
+                if (!body) return;
+
+                let data;
+                try {
+                    data = await api('sources.bucket_objects', { source: currentSource(), bucket: openedBucket });
+                } catch (err) {
+                    body.innerHTML = '<div class="mwarn">' + icon('alert-triangle')
+                        + '<span>' + escapeHtml(err.message) + '</span></div>';
+                    return;
+                }
+
+                if (!data.count) {
+                    body.innerHTML = '<p class="mhint">这个桶是空的。</p>'
+                        + (data.bound
+                            ? '<div class="mwarn" style="margin-top:14px">' + icon('alert-triangle')
+                                + '<span>该桶正被存储源使用，桶内对象是本地仓的副本记录。</span></div>'
+                            : '');
+                    return;
+                }
+
+                body.innerHTML = '<p class="mhint" style="margin-bottom:12px">共 ' + data.count + ' 个对象'
+                    + (data.truncated ? '（只显示前 200 个）' : '') + '，合计 ' + escapeHtml(data.totalText) + '</p>'
+                    + '<ul class="objlist">'
+                    + data.objects.map((o) => '<li>'
+                        + '<span class="objlist__key" title="' + escapeHtml(o.key) + '">' + escapeHtml(o.key) + '</span>'
+                        + '<span class="objlist__size">' + SY.humanSize(o.size) + '</span>'
+                        + (data.bound ? ''
+                            : '<button class="iconbtn" type="button" data-obj-del="' + escapeHtml(o.key) + '"'
+                                + ' aria-label="删除该对象">' + icon('trash-2') + '</button>')
+                        + '</li>').join('')
+                    + '</ul>'
+                    + (data.bound
+                        ? '<div class="mwarn" style="margin-top:14px">' + icon('alert-triangle')
+                            + '<span>该桶正被存储源使用，桶内对象是本地仓的副本记录，这里只能查看。</span></div>'
+                        : '');
+            }
+
+            function openObjects(bucket) {
+                openedBucket = bucket;
+                refreshObjects = renderObjects;
+
+                SY.openModal('桶内对象 · ' + bucket,
+                    '<div class="blank">' + icon('loader') + '<p class="blank__hint">正在读取…</p></div>',
+                    '<button class="mbtn mbtn--danger" type="button" data-x="purge">清空桶</button>'
+                    + '<button class="mbtn" type="button" data-x="close">关闭</button>');
+
+                const foot = $('[data-modal-foot]');
+                foot.querySelector('[data-x="close"]').addEventListener('click', SY.closeModal);
+                foot.querySelector('[data-x="purge"]').addEventListener('click', async (ev) => {
+                    // 清空不可逆：必须原样输入桶名
+                    const typed = await SY.prompt('清空存储桶', '原样输入桶名以确认：' + openedBucket, '', openedBucket);
+                    if (typed === null) return;
+
+                    const btn = ev.currentTarget;
+                    btn.disabled = true;
+                    try {
+                        const r = await api('sources.bucket_purge', {
+                            source: currentSource(),
+                            bucket: openedBucket,
+                            confirm: typed.trim(),
+                        });
+                        toast(r.message + (r.remaining ? '，仍有剩余，可再点一次' : ''));
+                        await renderObjects();
+                        loadBuckets();
+                    } catch (err) {
+                        toast(err.message, 'err');
+                    } finally {
+                        if (btn.isConnected) btn.disabled = false;
+                    }
+                });
+
+                renderObjects();
+            }
+
+            /* 桶相关的点击统一走一个 document 级代理：
+               弹窗里的元素是动态生成的，逐次绑定会在反复开关后叠加监听器 */
+            document.addEventListener('click', async (e) => {
+                const peek = e.target.closest('[data-bucket-peek]');
+                if (peek) {
+                    openObjects(peek.dataset.bucketPeek);
+                    return;
+                }
+
+                const delObj = e.target.closest('[data-obj-del]');
+                if (delObj) {
+                    delObj.disabled = true;
+                    try {
+                        const r = await api('sources.bucket_object_delete', {
+                            source: currentSource(),
+                            bucket: openedBucket,
+                            key: delObj.dataset.objDel,
+                        });
+                        toast(r.message || '已删除');
+                        if (refreshObjects) await refreshObjects();
+                        loadBuckets();
+                    } catch (err) {
+                        toast(err.message, 'err');
+                        delObj.disabled = false;
+                    }
+                    return;
+                }
+
+                const bind = e.target.closest('[data-bucket-bind]');
+                if (bind) {
+                    bind.disabled = true;
+                    const bucket = bind.dataset.bucketBind;
+                    try {
+                        const r = await api('sources.bucket_bind', { source: currentSource(), bucket: bucket, name: bucket });
+                        toast('已绑定为存储源「' + r.name + '」');
+                        setTimeout(() => location.reload(), 700);
+                    } catch (err) {
+                        toast(err.message, 'err');
+                        bind.disabled = false;
+                    }
+                    return;
+                }
+
+                const del = e.target.closest('[data-bucket-del]');
+                if (del) {
+                    const bucket = del.dataset.bucketDel;
+                    const typed = await SY.prompt('删除存储桶', '原样输入桶名以确认：' + bucket, '', bucket);
+                    if (typed === null) return;
+
+                    del.disabled = true;
+                    try {
+                        const r = await api('sources.bucket_delete', {
+                            source: currentSource(),
+                            bucket: bucket,
+                            confirm: typed.trim(),
+                        });
+                        toast(r.message || '桶已删除');
+                        loadBuckets();
+                    } catch (err) {
+                        toast(err.message, 'err');
+                        del.disabled = false;
+                    }
+                }
+            });
+        }
     }
 
     /* ══════════════════════════════════════════════════════════ 任务页 */
@@ -788,6 +1037,54 @@
         });
     }
 
+    /* ══════════════════════════════════════════════════════════ 两步验证 */
+
+    function pageTotp() {
+        const block = document.querySelector('[data-copy-secret]');
+        if (!block) {
+            return;
+        }
+
+        const tip = document.querySelector('[data-copy-tip]');
+        // 展示时按 4 位分组，复制时去掉空格——认证器只认连续字符
+        const raw = block.textContent.replace(/\s+/g, '');
+
+        block.addEventListener('click', async () => {
+            let ok = true;
+            try {
+                await navigator.clipboard.writeText(raw);
+            } catch (err) {
+                ok = false;
+            }
+            if (!ok) {
+                // 剪贴板 API 不可用（非 HTTPS 等）时退化为选中，让用户自行复制
+                const range = document.createRange();
+                range.selectNodeContents(block);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+                if (tip) {
+                    tip.textContent = '已选中，请按 Ctrl+C 复制';
+                }
+                return;
+            }
+
+            block.classList.add('is-copied');
+            if (tip) {
+                tip.textContent = '已复制到剪贴板';
+                tip.classList.add('is-copied');
+            }
+            toast('密钥已复制');
+            window.setTimeout(() => {
+                block.classList.remove('is-copied');
+                if (tip) {
+                    tip.textContent = '点击即可复制';
+                    tip.classList.remove('is-copied');
+                }
+            }, 1800);
+        });
+    }
+
     /* ══════════════════════════════════════════════════════════ 分发 */
 
     const pages = {
@@ -799,6 +1096,7 @@
         settings: pageSettings,
         tokens: pageTokens,
         rules: pageRules,
+        totp: pageTotp,
     };
 
     const name = root.dataset.page;

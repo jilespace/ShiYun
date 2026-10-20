@@ -14,6 +14,7 @@ $tabs = [
     ['id' => 'profile',  'label' => '个人资料', 'href' => url('settings.show')],
     ['id' => 'password', 'label' => '修改密码', 'href' => url('settings.password')],
     ['id' => 'private',  'label' => '私密空间', 'href' => url('security.private')],
+    ['id' => 'totp',     'label' => '两步验证', 'href' => url('security.twofactor')],
     ['id' => 'logs',     'label' => '登录日志', 'href' => url('security.logs')],
     ['id' => 'activity', 'label' => '操作日志', 'href' => url('security.activity')],
     ['id' => 'rules',    'label' => '自动化',   'href' => url('rules.list')],

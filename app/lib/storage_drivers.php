@@ -312,25 +312,48 @@ function storage_run_stdin(string $cmd, string $stdin): string
  * 由配置推导虚拟主机风格的 base URL 与 host 头。
  * 两套签名（请求头 / 查询串）都必须走这里，否则会出现「签名与发送的 host 不一致」。
  *
+ * @param bool $withBucket false 用于服务级调用（列桶）：桶名不参与寻址，打到端点根
  * @return array{base:string,host:string}
  */
-function s3_addressed(array $c): array
+function s3_addressed(array $c, bool $withBucket = true): array
 {
     $endpoint = rtrim((string) $c['endpoint'], '/');
-    $bucket = (string) $c['bucket'];
+    $bucket = (string) ($c['bucket'] ?? '');
 
     $scheme = (string) (parse_url($endpoint, PHP_URL_SCHEME) ?: 'https');
     $host = (string) parse_url($endpoint, PHP_URL_HOST);
     $port = parse_url($endpoint, PHP_URL_PORT);
 
     // 桶名进 host；已经带过就不再拼
-    if (!str_starts_with($host, $bucket . '.')) {
+    if ($withBucket && $bucket !== '' && !str_starts_with($host, $bucket . '.')) {
         $host = $bucket . '.' . $host;
     }
 
     $authority = $host . ($port !== null ? ':' . $port : '');
 
     return ['base' => $scheme . '://' . $authority, 'host' => $authority];
+}
+
+/**
+ * SigV4 的 CanonicalQueryString：键按编码后字典序、值一律 RFC3986 编码。
+ * 桶级操作与预签名（另一套算法）各自独立实现，这里只服务 s3_request。
+ */
+function s3_canonical_query(array $query): string
+{
+    if ($query === []) {
+        return '';
+    }
+    $pairs = [];
+    foreach ($query as $k => $v) {
+        $pairs[rawurlencode((string) $k)] = rawurlencode((string) $v);
+    }
+    ksort($pairs);
+
+    $out = [];
+    foreach ($pairs as $k => $v) {
+        $out[] = $k . '=' . $v;
+    }
+    return implode('&', $out);
 }
 
 /**
@@ -343,13 +366,22 @@ function s3_request(array $c, string $method, string $key, array $opts = []): ar
 {
     $region = (string) ($c['region'] ?? 'us-east-1');
     $prefix = trim((string) ($c['prefix'] ?? ''), '/');
+    $service = !empty($opts['service']);
 
-    // 虚拟主机风格：桶名进 host（COS 拒绝 path-style，报 PathStyleDomainForbidden）
-    $addr = s3_addressed($c);
+    // 虚拟主机风格：桶名进 host（COS 拒绝 path-style，报 PathStyleDomainForbidden）。
+    // 列桶是服务级操作，桶名不参与寻址，打到端点根。
+    $addr = s3_addressed($c, !$service);
     $hostHeader = $addr['host'];
 
-    $objectKey = $prefix !== '' ? $prefix . '/' . ltrim($key, '/') : ltrim($key, '/');
-    $url = $addr['base'] . '/' . ($objectKey !== '' ? str_replace('%2F', '/', rawurlencode($objectKey)) : '');
+    if ($service) {
+        $uriPath = '/' . ltrim($key, '/');
+    } else {
+        $objectKey = $prefix !== '' ? $prefix . '/' . ltrim($key, '/') : ltrim($key, '/');
+        $uriPath = '/' . ($objectKey !== '' ? str_replace('%2F', '/', rawurlencode($objectKey)) : '');
+    }
+
+    $canonicalQuery = s3_canonical_query((array) ($opts['query'] ?? []));
+    $url = $addr['base'] . $uriPath . ($canonicalQuery !== '' ? '?' . $canonicalQuery : '');
 
     $amzDate = gmdate('Ymd\THis\Z');
     $dateStamp = gmdate('Ymd');
@@ -366,6 +398,10 @@ function s3_request(array $c, string $method, string $key, array $opts = []): ar
     if (isset($opts['content_type'])) {
         $headers['content-type'] = (string) $opts['content_type'];
     }
+    // DeleteObjects 需要 Content-MD5（AWS 强制，COS 兼容）；它必须进签名头，故在此加入
+    if (isset($opts['content_md5'])) {
+        $headers['content-md5'] = (string) $opts['content_md5'];
+    }
 
     ksort($headers);
     $canonicalHeaders = '';
@@ -374,11 +410,10 @@ function s3_request(array $c, string $method, string $key, array $opts = []): ar
     }
     $signedHeaders = implode(';', array_keys($headers));
 
-    $uriPath = parse_url($url, PHP_URL_PATH) ?: '/';
     $canonicalRequest = implode("\n", [
         $method,
         $uriPath,
-        '',
+        $canonicalQuery,
         $canonicalHeaders,
         $signedHeaders,
         $payloadHash,
@@ -662,4 +697,418 @@ function storage_source_delete(array $source, string $objectKey): void
         default:
             throw new RuntimeException('该存储类型不支持远程删除：' . $driver);
     }
+}
+
+/* ============================================================ 存储桶管理
+   用一组 S3 凭据对桶本身做增删查。全部走桶级调用，因此必须清掉 prefix：
+   s3_request 会把 prefix 拼进对象路径，带上它就打到「目录」而不是桶根，
+   storage_test_s3 里也是同一个原因才把 prefix 置空。
+   ========================================================================= */
+
+/** 桶名合法性（S3 / COS 通用规则：3–63 位，小写字母数字以及 - 和 .） */
+function s3_bucket_name_valid(string $name): bool
+{
+    if (preg_match('/^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$/', $name) !== 1) {
+        return false;
+    }
+    if (str_contains($name, '..') || str_contains($name, '.-') || str_contains($name, '-.')) {
+        return false;
+    }
+    // 形如 192.168.1.1 的名字不允许
+    return preg_match('/^\d{1,3}(\.\d{1,3}){3}$/', $name) !== 1;
+}
+
+/** 把目标桶装进配置：换掉 bucket、清掉 prefix，其余凭据照旧 */
+function s3_bucket_config(array $config, string $bucket): array
+{
+    $config['bucket'] = $bucket;
+    $config['prefix'] = '';
+    return $config;
+}
+
+/** 解析 S3 / COS 的 XML 错误体，取出错误码与描述 */
+function s3_error_detail(string $body): array
+{
+    $code = '';
+    $message = '';
+    if ($body !== '') {
+        if (preg_match('#<Code>([^<]*)</Code>#', $body, $m) === 1) {
+            $code = trim($m[1]);
+        }
+        if (preg_match('#<Message>([^<]*)</Message>#', $body, $m) === 1) {
+            $message = trim($m[1]);
+        }
+    }
+    return ['code' => $code, 'message' => $message];
+}
+
+/**
+ * 把 S3 错误翻译成看得懂的话。
+ * 桶级操作最容易撞上的两类失败：权限不够、桶名冲突——两者原文都很难读。
+ */
+function s3_error_message(array $res, string $fallback): string
+{
+    $detail = s3_error_detail((string) ($res['body'] ?? ''));
+    $code = $detail['code'];
+
+    $known = [
+        'BucketAlreadyOwnedByYou'  => '这个桶已经在你名下，不用重复创建。',
+        'BucketAlreadyExists'      => '桶名已被占用——桶名全局唯一，换一个再试。',
+        'BucketNotEmpty'           => '桶里还有对象，清空之后才能删除。',
+        'NoSuchBucket'             => '桶不存在，可能已被删除。',
+        'InvalidBucketName'        => '桶名不合法。',
+        'AccessDenied'             => '权限不足：这组密钥没有桶级权限（需要 ListBuckets / PutBucket / DeleteBucket）。',
+        'InvalidAccessKeyId'       => 'Access Key 无效，请核对密钥。',
+        'SignatureDoesNotMatch'    => '签名不匹配，请核对 Secret Key。',
+        'PathStyleDomainForbidden' => '该端点不接受 path-style 寻址，请确认 endpoint 填的是域名形式。',
+        'RequestTimeTooSkewed'     => '本机时间与服务器偏差过大，请校准系统时间。',
+    ];
+
+    if ($code !== '' && isset($known[$code])) {
+        return $known[$code] . '（' . $code . '）';
+    }
+
+    $tail = 'HTTP ' . (int) ($res['status'] ?? 0);
+    if ($code !== '') {
+        $tail .= ' ' . $code;
+    }
+    if ($detail['message'] !== '') {
+        $tail .= ' · ' . mb_substr($detail['message'], 0, 160);
+    }
+
+    return $fallback . '：' . $tail;
+}
+
+/** 解析 ListBuckets 返回的桶清单 */
+function s3_parse_bucket_list(string $xml): array
+{
+    if ($xml === '' || !class_exists('DOMDocument')) {
+        return [];
+    }
+
+    $prev = libxml_use_internal_errors(true);
+    $doc = new DOMDocument();
+    $loaded = $doc->loadXML($xml, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+    libxml_clear_errors();
+    libxml_use_internal_errors($prev);
+
+    if (!$loaded) {
+        return [];
+    }
+
+    $out = [];
+    foreach ($doc->getElementsByTagName('Bucket') as $node) {
+        $name = '';
+        $region = '';
+        $created = '';
+        foreach ($node->childNodes as $child) {
+            if (!$child instanceof DOMElement) {
+                continue;
+            }
+            if ($child->nodeName === 'Name') {
+                $name = trim($child->textContent);
+            } elseif ($child->nodeName === 'Location' || $child->nodeName === 'LocationConstraint') {
+                $region = trim($child->textContent);
+            } elseif ($child->nodeName === 'CreationDate') {
+                $created = trim($child->textContent);
+            }
+        }
+        if ($name !== '') {
+            $out[] = ['name' => $name, 'region' => $region, 'created' => $created];
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * 列出账号下全部桶。凭据权限不足时抛 RuntimeException（文案已翻译）。
+ *
+ * @return list<array{name:string,region:string,created:string}>
+ */
+function s3_list_buckets(array $config): array
+{
+    $cfg = $config;
+    $cfg['prefix'] = '';
+    // 服务级调用：桶名不进 host，路径为端点根
+    $res = s3_request($cfg, 'GET', '', [
+        'service'      => true,
+        'payload_hash' => hash('sha256', ''),
+    ]);
+
+    if ($res['status'] < 200 || $res['status'] >= 300) {
+        throw new RuntimeException(s3_error_message($res, '列桶失败'));
+    }
+
+    return s3_parse_bucket_list((string) $res['body']);
+}
+
+/**
+ * 探桶：状态码决定存在性。
+ * 200/3xx 可访问；404 不存在；403 多为「存在但密钥无权访问」，也可能被他人占用。
+ *
+ * @return array{status:int,state:string,message:string}
+ */
+function s3_bucket_probe(array $config, string $bucket): array
+{
+    if (!s3_bucket_name_valid($bucket)) {
+        return ['status' => 0, 'state' => 'invalid', 'message' => '桶名不合法。'];
+    }
+
+    $res = s3_request(s3_bucket_config($config, $bucket), 'HEAD', '', [
+        'payload_hash' => hash('sha256', ''),
+    ]);
+    $status = (int) $res['status'];
+
+    if ($status >= 200 && $status < 400) {
+        return ['status' => $status, 'state' => 'ok', 'message' => '桶存在且可访问。'];
+    }
+    if ($status === 404) {
+        return ['status' => $status, 'state' => 'missing', 'message' => '桶不存在。'];
+    }
+    if ($status === 403) {
+        return ['status' => $status, 'state' => 'denied', 'message' => '桶存在但当前密钥无访问权限，或该桶名属于他人。'];
+    }
+
+    return ['status' => $status, 'state' => 'error', 'message' => s3_error_message($res, '探测桶失败')];
+}
+
+/**
+ * 桶内是否为空。只探一条对象——判断空/非空足够，不用把对象全列一遍。
+ *
+ * @return array{empty:bool,message:string}
+ */
+function s3_bucket_empty(array $config, string $bucket): array
+{
+    $res = s3_request(s3_bucket_config($config, $bucket), 'GET', '', [
+        'query'        => ['list-type' => '2', 'max-keys' => '1'],
+        'payload_hash' => hash('sha256', ''),
+    ]);
+
+    if ($res['status'] < 200 || $res['status'] >= 300) {
+        throw new RuntimeException(s3_error_message($res, '读取桶内容失败'));
+    }
+
+    $body = (string) $res['body'];
+    $hasObject = str_contains($body, '<Contents>') || str_contains($body, '<Key>');
+
+    return [
+        'empty'   => !$hasObject,
+        'message' => $hasObject ? '桶内还有对象。' : '桶是空的。',
+    ];
+}
+
+/**
+ * 创建桶。region 非 us-east-1 时按 S3 约定带上 LocationConstraint
+ * （COS 通常忽略该字段，创建区域由 endpoint 决定）。
+ */
+function s3_create_bucket(array $config, string $bucket): array
+{
+    if (!s3_bucket_name_valid($bucket)) {
+        return ['ok' => false, 'message' => '桶名不合法：3–63 位，只能用小写字母、数字、- 和 .，且首尾必须是字母或数字。'];
+    }
+
+    $region = (string) ($config['region'] ?? '');
+    $body = '';
+    if ($region !== '' && $region !== 'us-east-1') {
+        $body = '<CreateBucketConfiguration><LocationConstraint>'
+            . htmlspecialchars($region, ENT_QUOTES | ENT_XML1, 'UTF-8')
+            . '</LocationConstraint></CreateBucketConfiguration>';
+    }
+
+    $res = s3_request(s3_bucket_config($config, $bucket), 'PUT', '', [
+        'body'         => $body,
+        'payload_hash' => hash('sha256', $body),
+        'content_type' => 'application/xml',
+    ]);
+
+    if ($res['status'] >= 200 && $res['status'] < 300) {
+        return ['ok' => true, 'message' => '桶已创建。'];
+    }
+
+    return ['ok' => false, 'message' => s3_error_message($res, '创建桶失败')];
+}
+
+/**
+ * 删除桶。调用方必须先用 s3_bucket_empty() 确认空桶——
+ * 这里只负责把 BucketNotEmpty 翻译清楚，不做静默清空。
+ */
+function s3_delete_bucket(array $config, string $bucket): array
+{
+    if (!s3_bucket_name_valid($bucket)) {
+        return ['ok' => false, 'message' => '桶名不合法。'];
+    }
+
+    $res = s3_request(s3_bucket_config($config, $bucket), 'DELETE', '', [
+        'payload_hash' => hash('sha256', ''),
+    ]);
+
+    // 404 视为已不存在，幂等成功
+    if ($res['status'] === 404) {
+        return ['ok' => true, 'message' => '桶已不存在。'];
+    }
+    if ($res['status'] >= 200 && $res['status'] < 300) {
+        return ['ok' => true, 'message' => '桶已删除。'];
+    }
+
+    return ['ok' => false, 'message' => s3_error_message($res, '删除桶失败')];
+}
+
+/* ---------------------------------------------------- 桶内对象（查看 / 清空）
+   删桶要求桶为空，此前界面只提示「先清空」却没给手段——这几件事补上这条路。
+   ========================================================================= */
+
+/** 解析 ListObjectsV2 的对象清单 */
+function s3_parse_object_list(string $xml): array
+{
+    if ($xml === '' || !class_exists('DOMDocument')) {
+        return [];
+    }
+
+    $prev = libxml_use_internal_errors(true);
+    $doc = new DOMDocument();
+    $loaded = $doc->loadXML($xml, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+    libxml_clear_errors();
+    libxml_use_internal_errors($prev);
+
+    if (!$loaded) {
+        return [];
+    }
+
+    $out = [];
+    foreach ($doc->getElementsByTagName('Contents') as $node) {
+        $key = '';
+        $size = 0;
+        $modified = '';
+        foreach ($node->childNodes as $child) {
+            if (!$child instanceof DOMElement) {
+                continue;
+            }
+            if ($child->nodeName === 'Key') {
+                $key = $child->textContent;
+            } elseif ($child->nodeName === 'Size') {
+                $size = (int) $child->textContent;
+            } elseif ($child->nodeName === 'LastModified') {
+                $modified = trim($child->textContent);
+            }
+        }
+        if ($key !== '') {
+            $out[] = ['key' => $key, 'size' => $size, 'modified' => $modified];
+        }
+    }
+
+    return $out;
+}
+
+/**
+ * 列出桶内对象。
+ * @return array{objects:list<array>,count:int,truncated:bool}
+ */
+function s3_list_objects(array $config, string $bucket, int $limit = 200): array
+{
+    $limit = max(1, min(1000, $limit));
+
+    $res = s3_request(s3_bucket_config($config, $bucket), 'GET', '', [
+        'query'        => ['list-type' => '2', 'max-keys' => (string) $limit],
+        'payload_hash' => hash('sha256', ''),
+    ]);
+
+    if ($res['status'] < 200 || $res['status'] >= 300) {
+        throw new RuntimeException(s3_error_message($res, '读取桶内对象失败'));
+    }
+
+    $objects = s3_parse_object_list((string) $res['body']);
+
+    return [
+        'objects'   => $objects,
+        'count'     => count($objects),
+        'truncated' => str_contains((string) $res['body'], '<IsTruncated>true</IsTruncated>'),
+    ];
+}
+
+/** 删除桶内单个对象；404 视为已不存在 */
+function s3_delete_object(array $config, string $bucket, string $key): array
+{
+    if ($key === '') {
+        return ['ok' => false, 'message' => '对象键为空。'];
+    }
+
+    $res = s3_request(s3_bucket_config($config, $bucket), 'DELETE', $key, [
+        'payload_hash' => hash('sha256', ''),
+    ]);
+
+    if ($res['status'] === 404) {
+        return ['ok' => true, 'message' => '对象已不存在。'];
+    }
+    if ($res['status'] >= 200 && $res['status'] < 300) {
+        return ['ok' => true, 'message' => '对象已删除。'];
+    }
+
+    return ['ok' => false, 'message' => s3_error_message($res, '删除对象失败')];
+}
+
+/**
+ * 批量删除（DeleteObjects，一次最多 1000 个键）。
+ * 逐个 DELETE 会打上百次请求，既慢又容易在浏览器侧超时，所以走批量接口。
+ */
+function s3_delete_objects(array $config, string $bucket, array $keys): array
+{
+    $keys = array_values(array_filter(
+        array_map(static fn ($k): string => (string) $k, $keys),
+        static fn (string $k): bool => $k !== ''
+    ));
+    $keys = array_slice($keys, 0, 1000);
+
+    if ($keys === []) {
+        return ['ok' => true, 'deleted' => 0, 'message' => '没有需要删除的对象。'];
+    }
+
+    $xml = '<Delete>';
+    foreach ($keys as $key) {
+        $xml .= '<Object><Key>' . htmlspecialchars($key, ENT_QUOTES | ENT_XML1, 'UTF-8') . '</Key></Object>';
+    }
+    $xml .= '</Delete>';
+
+    $res = s3_request(s3_bucket_config($config, $bucket), 'POST', '', [
+        'query'        => ['delete' => ''],
+        'body'         => $xml,
+        'payload_hash' => hash('sha256', $xml),
+        'content_md5'  => base64_encode(md5($xml, true)),
+        'content_type' => 'application/xml',
+    ]);
+
+    if ($res['status'] < 200 || $res['status'] >= 300) {
+        return ['ok' => false, 'deleted' => 0, 'message' => s3_error_message($res, '批量删除失败')];
+    }
+
+    return ['ok' => true, 'deleted' => count($keys), 'message' => '已删除 ' . count($keys) . ' 个对象。'];
+}
+
+/**
+ * 清空桶：列一页（最多 1000）后批量删，再探一眼确认是否已空。
+ * 调用方负责确认与守卫；这里只做动作，不猜意图。
+ *
+ * @return array{ok:bool,deleted:int,remaining:bool,message:string}
+ */
+function s3_purge_objects(array $config, string $bucket): array
+{
+    $listed = s3_list_objects($config, $bucket, 1000);
+    if ($listed['count'] === 0) {
+        return ['ok' => true, 'deleted' => 0, 'remaining' => false, 'message' => '桶本来就是空的。'];
+    }
+
+    $result = s3_delete_objects($config, $bucket, array_column($listed['objects'], 'key'));
+    if (!$result['ok']) {
+        return ['ok' => false, 'deleted' => 0, 'remaining' => true, 'message' => (string) $result['message']];
+    }
+
+    // 删完再探一眼：超过 1000 个对象时还有剩余，界面据此提示再点一次
+    $after = s3_list_objects($config, $bucket, 1);
+
+    return [
+        'ok'        => true,
+        'deleted'   => (int) $result['deleted'],
+        'remaining' => $after['count'] > 0,
+        'message'   => (string) $result['message'],
+    ];
 }

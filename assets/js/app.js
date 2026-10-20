@@ -410,6 +410,19 @@
         setInterval(tick, 1000);
     }
 
+    /* ===================================================== 两步验证码输入 */
+
+    const otpInput = document.querySelector('[data-otp-input]');
+    if (otpInput) {
+        otpInput.addEventListener('input', () => {
+            const digits = otpInput.value.replace(/\D/g, '').slice(0, 6);
+            otpInput.value = digits;
+            if (digits.length === 6) {
+                otpInput.form?.requestSubmit();
+            }
+        });
+    }
+
     /* ===================================================== 编辑即清除错误态 */
 
     document.querySelectorAll('.fld.is-invalid .fld__in, .agree.is-invalid input').forEach((el) => {

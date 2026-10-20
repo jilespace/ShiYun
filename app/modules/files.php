@@ -9,6 +9,13 @@ if (!defined('BASE_PATH')) {
 
 /* --------------------------------------------------------------- 页面 */
 
+/**
+ * 目录列表一页多少条。
+ * 此前是一次性把整个目录都查出来并渲染成 HTML —— 上万条的目录会把响应撑爆，
+ * 随后的元信息 IN (...) 查询也会超长。现在首页只渲染这一页，其余按需续取。
+ */
+const FILE_PAGE_SIZE = 300;
+
 function files_list(): void
 {
     $userId = Auth::id();
@@ -26,6 +33,9 @@ function files_list(): void
         'showHidden' => (bool) ($settings['show_hidden'] ?? false),
         'type'       => (string) ($_GET['type'] ?? 'all'),
     ];
+
+    $hasMore = false;
+    $nextOffset = 0;
 
     // 三个分区共用同一套渲染路径，只是数据源不同
     if ($section === 'trash') {
@@ -52,10 +62,22 @@ function files_list(): void
             redirect(url('files.list', ['folder' => user_root_id($userId)]));
         }
 
-        $children = array_map('node_public', node_children($userId, (int) $folder['id'], $opts));
+        // 首页只取一页；余下的由前端的「加载更多」按 offset 续取
+        [$page, $hasMore] = node_children_page($userId, (int) $folder['id'], $opts, FILE_PAGE_SIZE, 0);
+        $children = array_map('node_public', $page);
+        $nextOffset = count($children);
         $crumbs = node_breadcrumb($userId, (int) $folder['id']);
         $retention = 0;
     }
+
+    // 页脚数字取自整体统计，不能拿当前页去加总——否则翻页时数字会变
+    $childStats = $section === 'files'
+        ? node_child_stats($userId, (int) $folder['id'], (bool) ($settings['show_hidden'] ?? false))
+        : [
+            'folders' => count(array_filter($children, static fn (array $c): bool => $c['kind'] === 'folder')),
+            'files'   => count(array_filter($children, static fn (array $c): bool => $c['kind'] === 'file')),
+            'bytes'   => array_sum(array_map(static fn (array $c): int => $c['kind'] === 'file' ? (int) $c['size'] : 0, $children)),
+        ];
 
     $tags = q_all('SELECT * FROM tags WHERE user_id = ? ORDER BY name ASC', [$userId]);
 
@@ -88,6 +110,10 @@ function files_list(): void
         'section'   => $section,
         'opts'      => $opts,
         'retention' => $retention,
+        'hasMore'   => $hasMore,
+        'nextOffset' => $nextOffset,
+        'childStats' => $childStats,
+        'pageSize'  => FILE_PAGE_SIZE,
         'uploadSources'  => $uploadSources,
         'uploadSourceId' => $uploadSourceId,
         'quota'     => [
@@ -95,6 +121,106 @@ function files_list(): void
             'total' => (int) $user['quota_bytes'],
         ],
     ]);
+}
+
+/* --------------------------------------------------------------- 相册 */
+
+/** 相册过滤条件：全部图片文件（未删除；隐藏与私密空间按会话状态收放） */
+function album_where(int $userId, bool $showHidden): array
+{
+    $where = [
+        'n.user_id = ?',
+        "n.kind = 'file'",
+        'n.deleted_at IS NULL',
+        'n.blob_id IS NOT NULL',
+        "n.mime LIKE 'image/%'",
+    ];
+    $params = [$userId];
+
+    if (!$showHidden) {
+        $where[] = 'n.is_hidden = 0';
+    }
+    if (!Auth::privateUnlocked()) {
+        $where[] = 'n.is_private = 0';
+    }
+
+    return [implode(' AND ', $where), $params];
+}
+
+/** 相册一页数据：按上传时间倒序，多取一条判断是否还有下一页 */
+function album_fetch(int $userId, bool $showHidden, int $page, int $per = 60): array
+{
+    [$where, $params] = album_where($userId, $showHidden);
+
+    $rows = q_all(
+        'SELECT n.* FROM nodes n WHERE ' . $where
+        . ' ORDER BY n.created_at DESC, n.id DESC'
+        . ' LIMIT ' . ($per + 1) . ' OFFSET ' . (($page - 1) * $per),
+        $params
+    );
+
+    $hasMore = count($rows) > $per;
+    if ($hasMore) {
+        array_pop($rows);
+    }
+
+    return [array_map('node_public', $rows), $hasMore];
+}
+
+/** 按上传月份分组，保持倒序 */
+function album_group(array $items): array
+{
+    $groups = [];
+    foreach ($items as $n) {
+        $ts = strtotime((string) $n['created']);
+        $month = $ts !== false ? date('Y 年 n 月', $ts) : '未知时间';
+        $groups[$month][] = $n;
+    }
+    return $groups;
+}
+
+function files_album(): void
+{
+    $userId = Auth::id();
+    $user = Auth::user();
+    $settings = user_settings($userId);
+    $page = max(1, input_int('page', 1));
+
+    [$items, $hasMore] = album_fetch($userId, (bool) ($settings['show_hidden'] ?? false), $page);
+
+    [$where, $params] = album_where($userId, (bool) ($settings['show_hidden'] ?? false));
+    $total = (int) q_val('SELECT COUNT(*) FROM nodes n WHERE ' . $where, $params);
+
+    render('album', [
+        'title'     => '相册 · 拾云',
+        'bodyClass' => 'is-app',
+        'styles'    => ['/assets/css/files.css', '/assets/css/album.css'],
+        'scripts'   => ['/assets/js/icons.js', '/assets/js/shell.js', '/assets/js/album.js'],
+        'user'      => $user,
+        'section'   => 'album',
+        'quota'     => ['used' => (int) $user['used_bytes'], 'total' => (int) $user['quota_bytes']],
+        'groups'    => album_group($items),
+        'page'      => $page,
+        'hasMore'   => $hasMore,
+        'total'     => $total,
+    ]);
+}
+
+/** 相册翻页（无限滚动） */
+function files_album_data(): void
+{
+    $userId = require_auth_api();
+    $settings = user_settings($userId);
+    $page = max(1, input_int('page', 1));
+
+    [$items, $hasMore] = album_fetch($userId, (bool) ($settings['show_hidden'] ?? false), $page);
+
+    $groups = [];
+    foreach (album_group($items) as $month => $rows) {
+        $groups[] = ['month' => $month, 'items' => $rows];
+    }
+
+    json_ok(['groups' => $groups, 'page' => $page, 'hasMore' => $hasMore]);
 }
 
 /* --------------------------------------------------------------- 数据 */
@@ -144,10 +270,23 @@ function files_data(): void
         json_fail('私密空间已锁定。', 403, 'private_locked');
     }
 
+    // 传了 offset 就按页续取（前端的「加载更多」）；
+    // 不传则维持「一次给全」——页面上的常规刷新依赖这个行为。
+    $hasMore = false;
+    if (input('offset') !== null) {
+        $offset = max(0, input_int('offset'));
+        $limit = max(1, min(FILE_PAGE_SIZE * 4, input_int('limit', FILE_PAGE_SIZE)));
+        [$page, $hasMore] = node_children_page($userId, $folderId, $opts, $limit, $offset);
+        $children = array_map('node_public', $page);
+    } else {
+        $children = array_map('node_public', node_children($userId, $folderId, $opts));
+    }
+
     json_ok([
         'folder'   => node_public($folder),
         'crumbs'   => node_breadcrumb($userId, $folderId),
-        'children' => array_map('node_public', node_children($userId, $folderId, $opts)),
+        'children' => $children,
+        'hasMore'  => $hasMore,
         'stats'    => node_subtree_stats($userId, $folder),
     ]);
 }

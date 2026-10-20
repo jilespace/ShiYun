@@ -1,0 +1,142 @@
+/* =========================================================================
+   拾云 — 相册模式：按月时间线 + 大图网格。
+   壳体（spine / bar / page）沿用 files.css；这里只管相册本身。
+   ========================================================================= */
+
+.alb {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(30px, 4.6vh, 52px);
+}
+
+.alb__group {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.alb__month {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 0;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+    font-size: 1.02rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+}
+
+.alb__month i {
+    font-style: normal;
+    font-family: var(--font-display);
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    color: var(--dim-2);
+}
+
+.alb__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    gap: 10px;
+}
+
+.alb__cell {
+    position: relative;
+    display: block;
+    aspect-ratio: 1;
+    overflow: hidden;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--line);
+    transition: border-color 0.22s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.alb__cell:hover {
+    border-color: rgba(138, 136, 255, 0.55);
+    transform: translateY(-2px);
+}
+
+.alb__img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease;
+    opacity: 0;
+}
+
+.alb__img.is-ready {
+    opacity: 1;
+}
+
+.alb__cell:hover .alb__img {
+    transform: scale(1.04);
+}
+
+.alb__cap {
+    position: absolute;
+    inset: auto 0 0 0;
+    padding: 22px 10px 9px;
+    background: linear-gradient(to top, rgba(5, 6, 8, 0.82), rgba(5, 6, 8, 0));
+    font-size: 0.72rem;
+    color: var(--ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0;
+    transition: opacity 0.22s ease;
+}
+
+.alb__cell:hover .alb__cap,
+.alb__cell:focus-visible .alb__cap {
+    opacity: 1;
+}
+
+/* 加载更多哨兵 */
+.alb__more {
+    display: flex;
+    justify-content: center;
+    padding: 26px 0 8px;
+}
+
+.alb__more-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 0.78rem;
+    color: var(--dim-2);
+}
+
+.alb__more.is-loading .alb__more-hint::before {
+    content: "";
+    width: 13px;
+    height: 13px;
+    border: 2px solid var(--line-2);
+    border-top-color: var(--signal-2);
+    border-radius: 50%;
+    animation: alb-spin 0.8s linear infinite;
+}
+
+@keyframes alb-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (max-width: 720px) {
+    .alb__grid {
+        grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+        gap: 6px;
+    }
+
+    .alb__cell {
+        border-radius: 7px;
+    }
+
+    .alb__cap {
+        display: none;
+    }
+}

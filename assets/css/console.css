@@ -1253,3 +1253,204 @@ body.is-share .field {
         width: 100%;
     }
 }
+
+/* ── 两步验证 ───────────────────────────────────────────── */
+
+.totp-setup {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+}
+
+.totp-qr {
+    flex: none;
+    width: 184px;
+    height: 184px;
+    padding: 10px;
+    background: #fff;
+    border-radius: 12px;
+}
+
+.totp-qr svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.totp-setup__side {
+    flex: 1;
+    min-width: 0;
+}
+
+/* 手动密钥：整块可点，点了复制 */
+.totp-secret {
+    display: block;
+    width: 100%;
+    margin: 14px 0 0;
+    padding: 11px 14px;
+    border: 1px dashed var(--line-2);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    font-family: var(--font-mono);
+    font-size: 0.88rem;
+    letter-spacing: 0.14em;
+    word-spacing: 0.4em;
+    color: var(--ink);
+    text-align: left;
+    word-break: break-all;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.totp-secret:hover,
+.totp-secret:focus-visible {
+    border-color: var(--signal-2);
+    background: rgba(61, 58, 255, 0.08);
+}
+
+.totp-secret.is-copied {
+    border-style: solid;
+    border-color: var(--ok);
+}
+
+.totp-secret__tip {
+    margin: 7px 0 0;
+    font-size: 0.72rem;
+    color: var(--dim-2);
+}
+
+.totp-secret__tip.is-copied {
+    color: var(--ok);
+}
+
+.totp-confirm {
+    margin-top: 16px;
+}
+
+.totp-confirm .formactions {
+    display: flex;
+    gap: 9px;
+    margin-top: 14px;
+}
+
+@media (max-width: 640px) {
+    .totp-setup {
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .totp-setup__side {
+        width: 100%;
+    }
+}
+
+/* ── 存储桶管理 ─────────────────────────────────────────── */
+
+.bucketbar {
+    display: flex;
+    align-items: flex-end;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+}
+
+.bucketbar__pick {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 220px;
+}
+
+.bucketbar__acts {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+}
+
+@media (max-width: 720px) {
+    .bucketbar__pick,
+    .bucketbar__acts {
+        width: 100%;
+        min-width: 0;
+        margin-left: 0;
+    }
+}
+
+/* 桶内对象列表 */
+.objlist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 42vh;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm, 3px);
+}
+
+.objlist li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px 8px 13px;
+    border-bottom: 1px solid var(--line);
+}
+
+.objlist li:last-child {
+    border-bottom: 0;
+}
+
+.objlist__key {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink);
+}
+
+.objlist__size {
+    flex: none;
+    font-size: 0.74rem;
+    color: var(--dim-2);
+    font-variant-numeric: tabular-nums;
+}
+
+/* 一次性恢复码清单 */
+.reclist {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    list-style: none;
+    margin: 16px 0 0;
+    padding: 0;
+}
+
+.reclist li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    font-family: var(--font-mono);
+    font-size: 0.86rem;
+    letter-spacing: 0.1em;
+    color: var(--ink);
+}
+
+.reclist__no {
+    flex: none;
+    width: 18px;
+    font-size: 0.68rem;
+    letter-spacing: 0;
+    color: var(--dim-2);
+}
+
+@media (max-width: 560px) {
+    .reclist {
+        grid-template-columns: 1fr;
+    }
+}

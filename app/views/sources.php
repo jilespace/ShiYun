@@ -113,6 +113,48 @@ if (!defined('BASE_PATH')) {
                 <?php endif; ?>
             </div>
 
+            <div class="panel" style="margin-top:22px" data-bucket-panel
+                 data-accounts="<?= e(json_encode($bucketAccounts, JSON_UNESCAPED_UNICODE)) ?>">
+                <div class="panel__head">
+                    <h2 class="panel__title">存储桶</h2>
+                    <span class="panel__note">用已接入的 S3 / COS 密钥管理账号下的桶</span>
+                </div>
+
+                <?php if ($bucketAccounts === []): ?>
+                    <div class="panel__body">
+                        <div class="blank">
+                            <?= lucide('database', 'blank__ico') ?>
+                            <p class="blank__title">还没有可用的 S3 凭据来源</p>
+                            <p class="blank__hint">桶管理要借用存储源的密钥。先在上面接一个 S3 兼容的存储源，这里就能列桶、建桶、删桶。</p>
+                        </div>
+                    </div>
+                <?php else: ?>
+                    <div class="panel__body">
+                        <div class="bucketbar">
+                            <label class="bucketbar__pick">
+                                <span class="mfield__label">凭据来源</span>
+                                <select class="select" data-bucket-account>
+                                    <?php foreach ($bucketAccounts as $account): ?>
+                                        <option value="<?= (int) $account['id'] ?>"><?= e((string) $account['name']) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </label>
+                            <div class="bucketbar__acts">
+                                <button class="chipbtn" type="button" data-bucket-reload><?= lucide('refresh-cw', 'chipbtn__ico') ?>刷新</button>
+                                <button class="chipbtn" type="button" data-bucket-new><?= lucide('plus', 'chipbtn__ico') ?>新建桶</button>
+                            </div>
+                        </div>
+
+                        <div data-bucket-host>
+                            <div class="blank">
+                                <?= lucide('loader', 'blank__ico') ?>
+                                <p class="blank__hint">正在读取桶列表…</p>
+                            </div>
+                        </div>
+                    </div>
+                <?php endif; ?>
+            </div>
+
             <div class="panel" style="margin-top:22px">
                 <div class="panel__head"><h2 class="panel__title">支持的驱动</h2></div>
                 <div class="tblwrap">

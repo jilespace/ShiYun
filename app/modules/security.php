@@ -127,6 +127,141 @@ function security_private_action(): void
     redirect(url('security.private'));
 }
 
+/* --------------------------------------------------------------- 两步验证 */
+
+/**
+ * TOTP 管理页。三种状态：
+ *   off     —— 未设置，可点「开始设置」生成密钥
+ *   pending —— 密钥已生成但未确认：扫码 + 输验证码确认后才生效
+ *   on      —— 已启用：可输入验证码 + 登录密码关闭
+ */
+function security_twofactor(): void
+{
+    $user = Auth::user();
+
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+        security_twofactor_action();
+        return;
+    }
+
+    security_render_twofactor($user, []);
+}
+
+/** 两步验证页渲染（首屏与失败回显共用，避免两处各写一份） */
+function security_render_twofactor(array $user, array $errors): never
+{
+    $enabled = (int) $user['totp_enabled'] === 1;
+    $secret = (string) ($user['totp_secret'] ?? '');
+    $pending = !$enabled && $secret !== '';
+
+    // 明文恢复码只在生成后展示一次：取出来即从会话里清掉
+    $codesToShow = (array) ($_SESSION['totp_recovery_show'] ?? []);
+    unset($_SESSION['totp_recovery_show']);
+
+    render('totp', [
+        'title'     => '两步验证 · 拾云',
+        'bodyClass' => 'is-app',
+        'styles'    => ['/assets/css/files.css', '/assets/css/console.css'],
+        'scripts'   => ['/assets/js/icons.js', '/assets/js/shell.js', '/assets/js/console.js'],
+        'user'      => $user,
+        'section'   => 'settings',
+        'quota'     => ['used' => (int) $user['used_bytes'], 'total' => (int) $user['quota_bytes']],
+        'page'      => 'totp',
+        'tab'       => 'totp',
+        'state'     => $enabled ? 'on' : ($pending ? 'pending' : 'off'),
+        'secret'    => $secret,
+        // 长邮箱会让 otpauth URI 超出编码容量，此时返回空串，页面退化为只给手动密钥
+        'qrSvg'     => $pending
+            ? totp_qr_svg($secret, (string) $user['email'], (string) config('app_name') . ' SHIYUN')
+            : '',
+        'recovery'  => totp_recovery_stats((int) $user['id']),
+        'recoveryCodes' => $codesToShow,
+        'errors'    => $errors,
+    ]);
+    exit;
+}
+
+function security_twofactor_action(): void
+{
+    require_csrf_post();
+    $userId = Auth::id();
+    $user = find_user_by_id($userId);
+    if ($user === null) {
+        redirect(url('auth.login'));
+    }
+
+    $action = (string) ($_POST['action'] ?? '');
+    $code = (string) ($_POST['code'] ?? '');
+    $secret = (string) ($user['totp_secret'] ?? '');
+    $enabled = (int) $user['totp_enabled'] === 1;
+
+    $fail = static function (string $message) use ($user): never {
+        security_render_twofactor($user, ['form' => $message]);
+    };
+
+    if ($action === 'begin') {
+        if ($enabled) {
+            redirect(url('security.twofactor'));
+        }
+        // 每次开始都换新密钥，旧的一次性作废
+        q_update('users', ['totp_secret' => totp_secret_generate()], 'id = ?', [$userId]);
+        activity_log($userId, 'totp.begin');
+        redirect(url('security.twofactor'));
+    }
+
+    if ($action === 'cancel') {
+        if (!$enabled) {
+            q_update('users', ['totp_secret' => null], 'id = ?', [$userId]);
+        }
+        redirect(url('security.twofactor'));
+    }
+
+    if ($action === 'confirm') {
+        if ($enabled || $secret === '') {
+            redirect(url('security.twofactor'));
+        }
+        if (!totp_verify($secret, $code)) {
+            $fail('验证码不正确，请确认认证器时间与手机时间一致后重试。');
+        }
+        q_update('users', ['totp_enabled' => 1], 'id = ?', [$userId]);
+        // 开启的同时发一组一次性恢复码，避免认证器丢失后彻底进不来
+        $_SESSION['totp_recovery_show'] = totp_recovery_generate($userId);
+        activity_log($userId, 'totp.enable');
+        redirect(url('security.twofactor'));
+    }
+
+    if ($action === 'regen') {
+        if (!$enabled) {
+            redirect(url('security.twofactor'));
+        }
+        // 重发等于作废旧的，必须先用动态码证明本人持有认证器
+        if (!totp_verify($secret, $code)) {
+            $fail('验证码不正确，无法重新生成恢复码。');
+        }
+        $_SESSION['totp_recovery_show'] = totp_recovery_generate($userId);
+        activity_log($userId, 'totp.recovery_regen');
+        redirect(url('security.twofactor'));
+    }
+
+    if ($action === 'disable') {
+        if (!$enabled) {
+            redirect(url('security.twofactor'));
+        }
+        if (!totp_verify($secret, $code)) {
+            $fail('验证码不正确。');
+        }
+        if (!password_verify((string) ($_POST['password'] ?? ''), (string) $user['password_hash'])) {
+            $fail('登录密码不正确。');
+        }
+        q_update('users', ['totp_secret' => null, 'totp_enabled' => 0], 'id = ?', [$userId]);
+        totp_recovery_clear($userId);
+        activity_log($userId, 'totp.disable');
+        redirect(url('security.twofactor'));
+    }
+
+    redirect(url('security.twofactor'));
+}
+
 /* --------------------------------------------------------------- 登录日志 */
 
 function security_logs(): void

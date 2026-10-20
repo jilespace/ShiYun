@@ -10,7 +10,7 @@ if (!defined('BASE_PATH')) {
 /**
  * 数据库结构定义。改结构时把 SCHEMA_VERSION 加一，下次请求会自动补建。
  */
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 10;
 
 /** @return list<string> */
 function schema_statements(): array
@@ -35,6 +35,8 @@ function schema_statements(): array
             trash_root_id   BIGINT UNSIGNED NULL,
             private_root_id BIGINT UNSIGNED NULL,
             private_hash    VARCHAR(255)    NULL,
+            totp_secret     VARCHAR(64)     NULL,
+            totp_enabled    TINYINT(1)      NOT NULL DEFAULT 0,
             created_at      DATETIME        NOT NULL,
             updated_at      DATETIME        NOT NULL,
             last_login_at   DATETIME        NULL,
@@ -76,7 +78,8 @@ function schema_statements(): array
             PRIMARY KEY (id),
             KEY idx_login_user (user_id, created_at),
             KEY idx_login_email (email, created_at),
-            KEY idx_login_ip (ip, created_at)
+            KEY idx_login_ip (ip, created_at),
+            KEY idx_login_created (created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL;
 
@@ -91,6 +94,20 @@ function schema_statements(): array
             PRIMARY KEY (id),
             KEY idx_reset_token (token_hash),
             KEY idx_reset_user (user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL;
+
+    // TOTP 一次性恢复码：只存哈希，用掉即标记，认证器丢失时自救
+    $sql[] = <<<SQL
+        CREATE TABLE IF NOT EXISTS totp_recovery_codes (
+            id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id    BIGINT UNSIGNED NOT NULL,
+            code_hash  CHAR(64)        NOT NULL,
+            used_at    DATETIME        NULL,
+            created_at DATETIME        NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY uk_trc_hash (code_hash),
+            KEY idx_trc_user (user_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL;
 
@@ -193,6 +210,8 @@ function schema_statements(): array
             KEY idx_node_fav (user_id, is_favorite, deleted_at),
             KEY idx_node_name (user_id, name_key),
             KEY idx_node_ext (user_id, ext),
+            -- 相册按上传时间倒序翻页；没有这个索引会退化成 filesort（实测慢约 18 倍）
+            KEY idx_node_created (user_id, created_at),
             KEY idx_node_trash (user_id, deleted_at),
             KEY idx_node_blob (blob_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -359,7 +378,9 @@ function schema_statements(): array
             created_at DATETIME        NOT NULL,
             PRIMARY KEY (id),
             KEY idx_act_user (user_id, created_at),
-            KEY idx_act_node (node_id, created_at)
+            KEY idx_act_node (node_id, created_at),
+            -- 定时任务按 created_at 清理过期日志；没有这个索引就得全表扫
+            KEY idx_act_created (created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL;
 

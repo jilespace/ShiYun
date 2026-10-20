@@ -10,7 +10,7 @@ if (!defined('BASE_PATH')) {
 /* =========================================================================
    WebDAV：把网盘挂载成网络驱动器。
    入口 index.php?r=webdav.handle，子路径直接跟在后面（如 …/webdav.handle/设计稿）。
-   认证用网盘账号密码，或把 API 令牌当密码用。
+   认证用网盘账号密码，或把 API 令牌当密码用；账号开启两步验证后只接受 API 令牌。
    ========================================================================= */
 
 function webdav_handle(): void
@@ -20,7 +20,8 @@ function webdav_handle(): void
         header('WWW-Authenticate: Basic realm="拾云 WebDAV"');
         http_response_code(401);
         header('Content-Type: text/plain; charset=utf-8');
-        exit("需要认证：请使用网盘账号（邮箱或用户名 + 密码），或把 API 令牌当密码。\n");
+        exit("需要认证：请使用网盘账号（邮箱或用户名 + 密码），或把 API 令牌当密码。\n"
+            . "若该账号已开启两步验证，登录密码会被拒绝——请改用 API 令牌（设置 → API 令牌）。\n");
     }
 
     $userId = (int) $user['id'];
@@ -135,6 +136,14 @@ function webdav_auth(): ?array
         log_login(null, $login, 'fail', 'WebDAV 账号不存在或已停用');
         return null;
     }
+    // 账号开启两步验证后，登录密码不再被 WebDAV 接受。
+    // 否则「邮箱 + 密码 + 任意 WebDAV 客户端」这条路径就完整绕过了第二因子。
+    // 客户端不方便发 Bearer，但可以把 API 令牌填在密码位（上面的 sy_ 分支已处理）。
+    if ((int) $user['totp_enabled'] === 1) {
+        log_login((int) $user['id'], $login, 'fail', 'WebDAV 拒绝：已开启两步验证，需改用 API 令牌');
+        return null;
+    }
+
     if (!password_verify($secret, (string) $user['password_hash'])) {
         log_login((int) $user['id'], $login, 'fail', 'WebDAV 密码错误');
         return null;
