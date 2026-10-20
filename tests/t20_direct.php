@@ -37,19 +37,22 @@ check(!mime_inline_ok(''), '空 MIME 不得内联');
 // ------------------------------------------------- blob_stream 的守卫与 HEAD
 
 $storage = (string) file_get_contents(BASE_PATH . '/app/lib/storage.php');
+$guardPos = strpos($storage, 'mime_inline_ok($mime)');
+$dispPos  = strpos($storage, "header('Content-Disposition: '");
 check(str_contains($storage, 'mime_inline_ok($mime)'),
     'blob_stream 应用 mime_inline_ok 守卫内联');
-check(
-    strpos($storage, 'mime_inline_ok($mime)') < strpos($storage, "header('Content-Disposition: '"),
+// 必须两端都存在才比较：strpos 未命中返回 false，false 参与 < 会被当成 0，
+// 顺序断言会在守卫缺失时假过——正是它该报错的场景。
+check($guardPos !== false && $dispPos !== false && $guardPos < $dispPos,
     '守卫必须在写 Content-Disposition 之前生效'
 );
 
 // 必须匹配完整的 HEAD 守卫表达式。只找 "'HEAD'" 会命中 blob_direct_url 里的
 // s3_request($config, 'HEAD', ...)，那处在 Content-Disposition 之前，顺序断言会假挂。
 $headGuard = "\$_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD'";
-check(str_contains($storage, $headGuard), 'blob_stream 应短路 HEAD');
-check(
-    strpos($storage, $headGuard) > strpos($storage, "header('Content-Disposition: '"),
+$headPos = strpos($storage, $headGuard);
+check($headPos !== false, 'blob_stream 应短路 HEAD');
+check($headPos !== false && $headPos > $dispPos,
     'HEAD 短路必须写在 header 块之后（否则会漏掉 Content-Length）'
 );
 
