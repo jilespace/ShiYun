@@ -834,6 +834,71 @@
         });
     }
 
+    /* 直链：免登录、无落地页的取文件地址 */
+    async function doDirect(ids) {
+        if (ids.length !== 1) return;
+        const id = ids[0];
+        const n = state.nodes.get(id);
+        if (!n || n.kind !== 'file') return;
+
+        const body = '<p class="mhint">' + escapeHtml(n.name) + '</p>'
+            + '<div class="mfield"><span class="mfield__label">来源（留空 = 不限）</span>'
+            + '<input class="minput" data-dir-ip placeholder="203.0.113.7 或 203.0.113.0/24"></div>'
+            + '<p class="mhint">只支持单个 IP 或 IPv4 网段。走反向代理或内网穿透时请留空——'
+            + '那种环境下拿不到访客真实地址，填了会一律拒绝。</p>'
+            + '<div class="mfield"><span class="mfield__label">有效期</span>'
+            + '<select class="minput" data-dir-days>'
+            + '<option value="0" selected>永久</option>'
+            + '<option value="7">7 天</option>'
+            + '<option value="30">30 天</option>'
+            + '<option value="365">1 年</option>'
+            + '</select></div>';
+
+        openModal('获取直链', body,
+            '<button class="mbtn" type="button" data-x="no">取消</button>'
+            + '<button class="mbtn mbtn--primary" type="button" data-x="yes">生成</button>');
+
+        modalFoot.querySelector('[data-x="no"]').addEventListener('click', closeModal);
+        modalFoot.querySelector('[data-x="yes"]').addEventListener('click', async (ev) => {
+            const btn = ev.currentTarget;
+            if (btn.disabled) return;
+            btn.disabled = true;
+            try {
+                const data = await api('direct.create', {
+                    id: id,
+                    ipAllow: modalBody.querySelector('[data-dir-ip]').value.trim(),
+                    days: Number(modalBody.querySelector('[data-dir-days]').value),
+                });
+                const link = data.link;
+
+                const modalEl = document.querySelector('[data-modal]');
+                if (modalEl && modalEl.hidden) return;   // 用户已关闭弹窗，不再弹回
+
+                openModal('直链已生成',
+                    '<div class="mfield"><span class="mfield__label">直链（内联）</span>'
+                    + '<input class="minput" readonly value="' + escapeHtml(link.url) + '"></div>'
+                    + '<div class="mfield"><span class="mfield__label">下载直链</span>'
+                    + '<input class="minput" readonly value="' + escapeHtml(link.urlDownload) + '"></div>'
+                    + '<p class="mhint">' + escapeHtml(link.expiresText)
+                    + (link.ipAllow ? ' · 仅限 ' + escapeHtml(link.ipAllow) : ' · 不限来源') + '</p>',
+                    '<button class="mbtn mbtn--primary" type="button" data-x="ok">关闭</button>');
+
+                $('[data-modal-foot]').querySelector('[data-x="ok"]').addEventListener('click', closeModal);
+
+                try {
+                    await navigator.clipboard.writeText(link.url + '\n' + link.urlDownload);
+                    toast('两条链接已复制');
+                } catch (err) {
+                    toast('请手动选中链接复制', 'err');
+                }
+            } catch (err) {
+                toast(err.message, 'err');
+            } finally {
+                if (btn.isConnected) btn.disabled = false;
+            }
+        });
+    }
+
     /* ══════════════════════════════════════════════════════════ 右键菜单 */
 
     const ctx = $('[data-ctx]');
@@ -854,6 +919,7 @@
             if (node.kind === 'file') {
                 items.push(['download', 'download', '下载']);
                 items.push(['versions', 'history', '版本历史']);
+                items.push(['direct', 'plug', '直链']);
             }
             items.push(['rename', 'pencil', '重命名']);
             items.push(['move', 'move', '移动到…']);
@@ -1116,6 +1182,7 @@
             case 'restore': doRestore(ids); break;
             case 'purge': doPurge(ids); break;
             case 'share': doShare(ids); break;
+            case 'direct': doDirect(ids); break;
             case 'info': doInfo(ids[0]); break;
             case 'note': doNote(ids[0]); break;
             case 'color': doColor(ids); break;

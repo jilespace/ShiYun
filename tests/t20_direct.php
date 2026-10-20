@@ -403,4 +403,19 @@ check(str_contains($sharesView, '反向代理'), '视图应说明来源 IP 在�
 $consoleJs = (string) file_get_contents(BASE_PATH . '/assets/js/console.js');
 check(str_contains($consoleJs, 'data-direct-copy'), 'console.js 应处理直链复制');
 
+// ----------------------------------------------------- 文件列表右键面板
+
+$jsT10 = (string) file_get_contents(BASE_PATH . '/assets/js/files.js');
+check(str_contains($jsT10, "['direct', 'plug', '直链']"), '右键菜单应有「直链」项');
+check(str_contains($jsT10, 'async function doDirect'), 'files.js 应有 doDirect');
+check(str_contains($jsT10, 'direct.create'), 'doDirect 应调 direct.create');
+check(str_contains($jsT10, 'urlDownload'), 'doDirect 应提供下载直链');
+check(str_contains($jsT10, 'data-dir-ip'), 'doDirect 应支持来源 IP 输入');
+check(str_contains($jsT10, "case 'direct':"), 'runAction 应有 direct 分支');
+// 菜单项必须挂在 node.kind === 'file' 的分支里（右键菜单恒为单节点，见 openCtx）
+$fileBlock = strpos($jsT10, "if (node.kind === 'file') {");
+$directItem = strpos($jsT10, "['direct', 'plug', '直链']");
+check($fileBlock !== false && $directItem > $fileBlock,
+    '「直链」菜单项应落在 node.kind === \'file\' 的分支内');
+
 finish();
