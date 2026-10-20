@@ -267,6 +267,27 @@ function is_textual(string $mime, string $ext): bool
 }
 
 /**
+ * 该 MIME 是否可以作为内联内容发给浏览器。
+ *
+ * 白名单而非黑名单——黑名单永远漏。能进来的必须是浏览器会当作「数据」
+ * 渲染的类型；text/html、image/svg+xml 这类可以执行脚本的一律排除，
+ * 否则在站点同源下就是存储型 XSS。
+ */
+function mime_inline_ok(string $mime): bool
+{
+    $mime = strtolower(trim(explode(';', $mime)[0]));
+
+    if (in_array($mime, [
+        'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+        'image/avif', 'image/bmp', 'application/pdf', 'text/plain',
+    ], true)) {
+        return true;
+    }
+
+    return str_starts_with($mime, 'video/') || str_starts_with($mime, 'audio/');
+}
+
+/**
  * 校验并规范化用户输入的文件名。
  * 拒绝路径穿越、控制字符与保留名。
  */
