@@ -1485,7 +1485,7 @@ Expected: FAIL — `shares_list 应查 direct_links`
             </div>
 ```
 
-把现有的统计块 `<div class="grid grid--4" …>` 到 `</div>` 整段用 `<?php if ($tab === 'shares'): ?>` … `<?php endif; ?>` 包起来，并在其后插入直链面板：
+把现有的统计块 `<div class="grid grid--4" …>` **连同其后的「分享记录」面板**一起用 `<?php if ($tab === 'shares'): ?>` … `<?php endif; ?>` 包起来，然后在 `<?php endif; ?>` 之后插入直链面板。只包统计块是不够的——「分享记录」面板会继续在直链标签下显示，标签就白做了：
 
 ```php
             <?php if ($tab === 'direct'): ?>
