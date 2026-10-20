@@ -1295,18 +1295,32 @@ Expected: FAIL — `node_public 应含 directCount`
 
 - [ ] **Step 3: 改 `nodes.php`**
 
-在 `app/lib/nodes.php` 的 `node_attach_meta()`（`app/lib/nodes.php:140`）里，`$sharedMap` 循环之后插入。这个函数是 `node_children` / `node_list` / `node_trash_list` / `node_favorites` 的公共出口，改一处四处都拿到：
+`app/lib/nodes.php` 的 `node_attach_meta()`（`app/lib/nodes.php:140`）是 `node_children` / `node_list` / `node_trash_list` / `node_favorites` 的公共出口，改一处四处都拿到。
+
+注意这个函数**整个包在 `foreach (array_chunk($ids, 400) as $chunk)` 里**：map 的初始化在循环之前，查询在循环体内，绑参用 `[...$chunk, $userId]`。所以两处都要照这个形状加，不能照抄 `$sharedMap` 表面的样子：
+
+1. 在 `$memberMap = [];` 之后（**循环之前**）加一行：
 
 ```php
     $directMap = [];
-    foreach (q_all(
-        "SELECT node_id, COUNT(*) AS c FROM direct_links
-         WHERE node_id IN ({$in}) AND user_id = ? AND status = 'active' GROUP BY node_id",
-        [...$ids, $userId]
-    ) as $row) {
-        $directMap[(int) $row['node_id']] = (int) $row['c'];
-    }
 ```
+
+2. 在**循环体内** `$sharedMap` 那段之后插入：
+
+```php
+        foreach (q_all(
+            "SELECT node_id, COUNT(*) AS c FROM direct_links
+             WHERE node_id IN ({$in}) AND user_id = ? AND status = 'active' GROUP BY node_id",
+            [...$chunk, $userId]
+        ) as $row) {
+            $directMap[(int) $row['node_id']] = (int) $row['c'];
+        }
+```
+
+**两个坑，都会在列表超过 400 条时才暴露**（`node_children()` 无上限，`node_favorites()` 上限 500）：
+
+- 绑参必须用 `$chunk` 而不是 `$ids`。`$in` 是按 chunk 生成的，用 `$ids` 会让占位符与实参个数不等，抛 `PDOException: SQLSTATE[HY093]: Invalid parameter number`。
+- `$directMap = []` 必须在循环外。放循环内会每个 chunk 重置一次，前面 chunk 的计数全丢。
 
 在 `$row['share_count'] = $sharedMap[$id] ?? 0;` 之后插入：
 
