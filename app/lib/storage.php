@@ -335,6 +335,10 @@ function blob_stream(int $blobId, string $mime, string $filename, bool $inline, 
 
     $length = $end - $start + 1;
 
+    // 调用方传 inline=true 不代表就能内联：text/html、image/svg+xml 这类
+    // 会在本域名下执行脚本。白名单不放行的一律降级为下载。
+    $inline = $inline && mime_inline_ok($mime);
+
     if (!headers_sent()) {
         header_remove('Content-Type');
         http_response_code($partial ? 206 : 200);
@@ -347,6 +351,11 @@ function blob_stream(int $blobId, string $mime, string $filename, bool $inline, 
         if ($partial) {
             header(sprintf('Content-Range: bytes %d-%d/%d', $start, $end, $size));
         }
+    }
+
+    // HEAD 只要元信息：头部已经发完，不读文件
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
+        exit;
     }
 
     $fh = fopen($path, 'rb');
