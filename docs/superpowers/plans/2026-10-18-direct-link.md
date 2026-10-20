@@ -321,13 +321,13 @@ check(blob_direct_url($userT3, $blobT3Id, 'text/plain', 'a.txt', 'inline') === n
 check(blob_direct_url($userT3, $blobT3Id, 'text/plain', 'a.txt') === null,
     '默认参数应保持既有行为（attachment）');
 
-$ref = new ReflectionMethod('blob_direct_url');
+$ref = new ReflectionFunction('blob_direct_url');
 check($ref->getParameters()[4]->getName() === 'disposition',
     'blob_direct_url 第 5 个参数应为 disposition');
 check($ref->getParameters()[4]->getDefaultValue() === 'attachment',
     'blob_direct_url 的 disposition 默认值应为 attachment');
 
-$refD = new ReflectionMethod('blob_deliver');
+$refD = new ReflectionFunction('blob_deliver');
 check($refD->getParameters()[5]->getName() === 'disposition',
     'blob_deliver 第 6 个参数应为 disposition');
 check($refD->getParameters()[5]->getDefaultValue() === 'attachment',
