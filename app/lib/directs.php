@@ -163,8 +163,13 @@ function direct_resolve(string $token, string $ip): array
     return ['ok' => true, 'code' => 200, 'message' => '', 'row' => $row, 'node' => $node];
 }
 
-/** 直链信息的对外形状 */
-function direct_public(array $row): array
+/**
+ * 直链信息的对外形状。
+ *
+ * $nodeTrashed 由调用方从节点的 deleted_at 传入：直链本身不看回收站状态，
+ * 但文件进了回收站后 direct_resolve() 会返回 410，界面不能还显示「生效中」。
+ */
+function direct_public(array $row, bool $nodeTrashed = false): array
 {
     $expires = $row['expires_at'] ?? null;
     $token = (string) ($row['token'] ?? '');
@@ -188,5 +193,6 @@ function direct_public(array $row): array
         'createdAt'   => (string) ($row['created_at'] ?? ''),
         'createdText' => ($row['created_at'] ?? null) !== null ? time_ago((string) $row['created_at']) : '',
         'active'      => direct_is_live($row),
+        'nodeTrashed' => $nodeTrashed,
     ];
 }

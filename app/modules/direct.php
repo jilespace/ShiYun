@@ -15,6 +15,7 @@ function direct_serve(): void
     if ($method !== 'GET' && $method !== 'HEAD') {
         http_response_code(405);
         header('Allow: GET, HEAD');
+        header('Content-Type: text/plain; charset=utf-8');
         exit('仅支持 GET / HEAD');
     }
 
@@ -37,7 +38,10 @@ function direct_serve(): void
         'UPDATE direct_links SET hit_count = hit_count + 1, last_access_at = ? WHERE id = ?',
         [now(), (int) $row['id']]
     );
-    traffic_add((int) $row['user_id'], 'down', (int) $node['size'], 1);
+    // HEAD 只探测元信息、不传字节，不计入流量；但它是请求，hit_count 照记。
+    if ($method !== 'HEAD') {
+        traffic_add((int) $row['user_id'], 'down', (int) $node['size'], 1);
+    }
 
     blob_deliver(
         (int) $row['user_id'],

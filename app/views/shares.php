@@ -149,7 +149,9 @@ $permLabel = static fn (string $p): string => match ($p) {
 
             <?php if ($tab === 'direct'): ?>
             <?php
-            $dActive = count(array_filter($directs, static fn (array $d): bool => $d['active']));
+            // 文件在回收站的直链实际不可用，不计入「生效中」。
+            $dActive = count(array_filter($directs,
+                static fn (array $d): bool => $d['active'] && !$d['nodeTrashed']));
             $dHits = array_sum(array_map(static fn (array $d): int => (int) $d['hits'], $directs));
             $dBound = count(array_filter($directs, static fn (array $d): bool => $d['ipAllow'] !== ''));
             ?>
@@ -200,6 +202,11 @@ $permLabel = static fn (string $p): string => match ($p) {
                             </thead>
                             <tbody>
                                 <?php foreach ($directs as $d): ?>
+                                    <?php
+                                    // 三种状态：生效中 / 文件在回收站（直链返回 410）/ 已失效（撤销或过期）
+                                    $dLive  = $d['active'] && !$d['nodeTrashed'];
+                                    $dTrash = $d['active'] && $d['nodeTrashed'];
+                                    ?>
                                     <tr>
                                         <td>
                                             <div class="tbl__name">
@@ -223,9 +230,9 @@ $permLabel = static fn (string $p): string => match ($p) {
                                         <td class="num"><?= (int) $d['hits'] ?></td>
                                         <td class="muted nowrap"><?= e((string) $d['lastAccess']) ?></td>
                                         <td>
-                                            <span class="pill<?= $d['active'] ? '' : ' pill--muted' ?>">
-                                                <span class="pill__dot" style="--pill:<?= $d['active'] ? '#4ad07a' : 'rgba(244,242,236,.32)' ?>"></span>
-                                                <?= $d['active'] ? '生效中' : '已失效' ?>
+                                            <span class="pill<?= $dLive ? '' : ' pill--muted' ?>">
+                                                <span class="pill__dot" style="--pill:<?= $dLive ? '#4ad07a' : 'rgba(244,242,236,.32)' ?>"></span>
+                                                <?= $dLive ? '生效中' : ($dTrash ? '文件在回收站' : '已失效') ?>
                                             </span>
                                         </td>
                                         <td>

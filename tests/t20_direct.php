@@ -403,6 +403,17 @@ check(str_contains($sharesView, '反向代理'), '视图应说明来源 IP 在�
 $consoleJs = (string) file_get_contents(BASE_PATH . '/assets/js/console.js');
 check(str_contains($consoleJs, 'data-direct-copy'), 'console.js 应处理直链复制');
 
+// 状态列必须反映节点是否在回收站：文件进回收站后 direct_resolve() 返回 410，
+// 界面不能还显示绿色「生效中」。direct_public() 用 nodeTrashed 把这一信息带给视图。
+$pubRow = ['status' => 'active', 'expires_at' => null, 'token' => str_repeat('b', 32),
+           'ip_allow' => null, 'created_at' => now()];
+check(direct_public($pubRow)['nodeTrashed'] === false, '文件未在回收站时 nodeTrashed 应为 false');
+check(direct_public($pubRow, true)['nodeTrashed'] === true, '文件在回收站时 nodeTrashed 应为 true');
+check(direct_public($pubRow, true)['active'] === true,
+    '回收站不改变直链自身的 active（作废按钮仍要可用）');
+check(str_contains($sharesView, 'nodeTrashed'), '视图应据 nodeTrashed 区分状态');
+check(str_contains($sharesView, '文件在回收站'), '视图应能显示「文件在回收站」');
+
 // ----------------------------------------------------- 文件列表右键面板
 
 $jsT10 = (string) file_get_contents(BASE_PATH . '/assets/js/files.js');
@@ -417,5 +428,18 @@ $fileBlock = strpos($jsT10, "if (node.kind === 'file') {");
 $directItem = strpos($jsT10, "['direct', 'plug', '直链']");
 check($fileBlock !== false && $directItem > $fileBlock,
     '「直链」菜单项应落在 node.kind === \'file\' 的分支内');
+
+// ------------------------------------------------------------------- 清理
+
+// 删掉本块创建的节点。node_purge() 会一并释放 blob 引用并删除挂在它们上面的
+// 直链，否则每跑一次就多留一批 t15-* 节点，unique_name 后缀越滚越大。
+// check() 只记录失败、不抛异常，所以直线执行到这里总是安全的。
+foreach ([$nodeT6, $nodeT6b, $folderT6, $nodeT6c] as $n) {
+    node_purge($uidT6, $n);
+}
+node_purge($uidT8, $nodeT8);
+// node_purge 不刷新父目录的 child_count（它平时只作用于回收站里的节点），补一下。
+node_refresh_child_count($uidT6, user_root_id($uidT6));
+node_refresh_child_count($uidT6, user_private_id($uidT6));
 
 finish();

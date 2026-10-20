@@ -50,7 +50,7 @@ function shares_list(): void
 
     $directRows = q_all(
         'SELECT d.*, n.name AS node_name, n.kind AS node_kind, n.size AS node_size,
-                n.ext AS node_ext, n.mime AS node_mime
+                n.ext AS node_ext, n.mime AS node_mime, n.deleted_at AS node_deleted_at
          FROM direct_links d JOIN nodes n ON n.id = d.node_id
          WHERE d.user_id = ?
          ORDER BY d.id DESC LIMIT 300',
@@ -59,7 +59,9 @@ function shares_list(): void
 
     $directs = [];
     foreach ($directRows as $row) {
-        $link = direct_public($row);
+        // 文件在回收站时直链实际返回 410，状态列必须据此改口，不能仍显示「生效中」。
+        // 不把这类行过滤掉：用户仍要能看到并作废它。
+        $link = direct_public($row, $row['node_deleted_at'] !== null);
         $link['node'] = node_public([
             'id' => (int) $row['node_id'],
             'name' => (string) $row['node_name'],

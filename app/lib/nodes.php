@@ -740,6 +740,7 @@ function node_purge(int $userId, array $node): void
         q_exec("DELETE FROM file_index WHERE node_id IN ({$in})", $ids);
         q_exec("DELETE FROM folder_members WHERE node_id IN ({$in})", $ids);
         q_exec("DELETE FROM shares WHERE node_id IN ({$in})", $ids);
+        q_exec("DELETE FROM direct_links WHERE node_id IN ({$in})", $ids);
         q_exec("DELETE FROM nodes WHERE id IN ({$in})", $ids);
 
         if ($freedBytes > 0) {
