@@ -332,6 +332,15 @@ check($refD->getParameters()[5]->getName() === 'disposition',
     'blob_deliver 第 6 个参数应为 disposition');
 check($refD->getParameters()[5]->getDefaultValue() === 'attachment',
     'blob_deliver 的 disposition 默认值应为 attachment');
+
+// 签名存在 ≠ 参数被使用。把真正实现功能的那几行也钉住，否则加了参数却把
+// $disposition 从 presign 值或本地回退里丢掉，上面的反射断言照样全绿。
+check(strpos($storage, "\$disposition . '; filename") !== false,
+    'blob_direct_url 应把 disposition 用在 presign 的 response-content-disposition 上');
+check(str_contains($storage, '$disposition === \'inline\''),
+    'blob_deliver 的本地回退应由 disposition 推导 inline');
+check(str_contains($storage, 'mime_inline_ok($mime) ? $disposition : '),
+    'blob_direct_url 应对非白名单类型强制降级为 attachment');
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -344,10 +353,15 @@ Expected: FAIL — 参数不存在（`ArgumentCountError` 或反射断言失败�
 
 - [ ] **Step 3: 改签名与实现**
 
-`app/lib/storage.php`，`blob_direct_url()` 签名改为：
+`app/lib/storage.php`，`blob_direct_url()` 签名改为（并在函数体开头加一道与 `blob_stream()` 同源的内联守卫——302 路径不经过 `blob_stream()`，少了这行，`text/html` + `inline` 会从这条路径把可执行内容内联发出去）：
 
 ```php
 function blob_direct_url(int $userId, int $blobId, string $mime, string $filename, string $disposition = 'attachment'): ?string
+{
+    // 与 blob_stream() 的守卫同源：内联只对白名单类型生效。
+    $disposition = mime_inline_ok($mime) ? $disposition : 'attachment';
+
+    $loc = blob_location_direct($userId, $blobId);
 ```
 
 同函数内的 `s3_presign()` 调用，把硬编码的 `'attachment;` 换成参数：
