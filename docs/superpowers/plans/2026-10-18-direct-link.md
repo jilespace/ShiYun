@@ -818,6 +818,10 @@ git commit -m "feat: 直链基础件（令牌、IP 匹配、存活判定、查�
 // -------------------------------------------------------- direct_resolve
 
 $uidT6 = (int) q_val('SELECT id FROM users ORDER BY id LIMIT 1');
+
+// 固定邮箱的固件跑第二遍就会撞唯一键，而这个文件每个后续任务都会重跑，
+// 所以先把上次留下的清掉，让测试可重复执行。
+q_exec('DELETE FROM users WHERE email = ?', ['t15other@example.test']);
 $otherT6 = q_insert('users', [
     'email' => 't15other@example.test', 'username' => 't15other',
     'display_name' => 't15other', 'password_hash' => password_hash('x', PASSWORD_DEFAULT),
