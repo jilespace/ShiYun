@@ -18,7 +18,7 @@
 - 所有输出 HTML 转义（`e()`）；文件名永远不当作 HTML。
 - 路由是查询串形式：`index.php?r=模块.动作` → `app/modules/模块.php` 的 `模块_动作()`。
 - 未登录可访问的路由必须登记进 `app/router.php` 的 `PUBLIC_ROUTES`。
-- **测试必须以 Web 服务运行身份执行**：`runuser -u www -- php tests/t15_direct.php`。用 root 跑会在 `runtime/storage` 留下 root 属主目录，之后 www 写不进去。
+- **测试必须以 Web 服务运行身份执行**：`runuser -u www -- php tests/t20_direct.php`。用 root 跑会在 `runtime/storage` 留下 root 属主目录，之后 www 写不进去。
 - 表结构改动要把 `app/schema.php` 的 `SCHEMA_VERSION` 加一，下次请求自动补建。
 - 设计系统：控制台页面用 3px 圆角（`--radius-sm`），认证页用 10–12px。只用 `app/icons.php` 里已有的 Lucide 图标，不加新图标文件。
 - 文案用中文，句末不加句号（与现有界面一致）。不用 emoji。
@@ -41,7 +41,7 @@
 |---|---|---|
 | `app/helpers.php` | 改 | 新增 `mime_inline_ok()`：内联类型白名单，无依赖纯函数 |
 | `app/lib/storage.php` | 改 | `blob_stream()` 加内联守卫与 HEAD 短路；`blob_direct_url()` / `blob_deliver()` 加 `$disposition` |
-| `app/schema.php` | 改 | `SCHEMA_VERSION` 6 → 7；新增 `direct_links` 表 |
+| `app/schema.php` | 改 | `SCHEMA_VERSION` 10 → 11；新增 `direct_links` 表 |
 | `app/lib/directs.php` | 新 | 直链领域逻辑：令牌、IP 匹配、准入判定、对外形状 |
 | `app/modules/direct.php` | 新 | 路由：`direct_serve()` / `direct_create()` / `direct_revoke()` |
 | `app/bootstrap.php` | 改 | 装载 `lib/directs.php` |
@@ -52,15 +52,15 @@
 | `app/views/shares.php` | 改 | 分段控件 + 直链面板 |
 | `assets/js/console.js` | 改 | 直链标签的复制 / 作废交互 |
 | `assets/js/files.js` | 改 | 右键「直链」菜单 + 生成面板 + 卡片角标 |
-| `tests/t15_direct.php` | 新 | 单元测试（CLI 直调，不走 HTTP） |
+| `tests/t20_direct.php` | 新 | 单元测试（CLI 直调，不走 HTTP） |
 
 ---
 
 ## Task 1: 内联类型白名单 `mime_inline_ok()`
 
 **Files:**
-- Modify: `app/helpers.php`（在 `is_textual()` 之后插入，约 `app/helpers.php:267` 后）
-- Test: `tests/t15_direct.php`（新建）
+- Modify: `app/helpers.php`（在 `is_textual()` 之后插入，约 `app/helpers.php:260` 后）
+- Test: `tests/t20_direct.php`（新建）
 
 **Interfaces:**
 - Consumes: 无
@@ -68,7 +68,7 @@
 
 - [ ] **Step 1: 写失败的测试**
 
-新建 `tests/t15_direct.php`：
+新建 `tests/t20_direct.php`：
 
 ```php
 <?php
@@ -113,7 +113,7 @@ finish();
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: FAIL — `未捕获异常：Error: Call to undefined function mime_inline_ok()`
@@ -148,7 +148,7 @@ function mime_inline_ok(string $mime): bool
 - [ ] **Step 4: 跑测试确认通过**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: 全部 `ok`，末行「全部通过」
@@ -156,7 +156,7 @@ Expected: 全部 `ok`，末行「全部通过」
 - [ ] **Step 5: 提交**
 
 ```bash
-git add app/helpers.php tests/t15_direct.php
+git add app/helpers.php tests/t20_direct.php
 git commit -m "feat: 内联类型白名单 mime_inline_ok()"
 ```
 
@@ -165,8 +165,8 @@ git commit -m "feat: 内联类型白名单 mime_inline_ok()"
 ## Task 2: `blob_stream()` 内联守卫与 HEAD
 
 **Files:**
-- Modify: `app/lib/storage.php:300-355`（`blob_stream()` 的头部区段）
-- Test: `tests/t15_direct.php`（追加）
+- Modify: `app/lib/storage.php:336-350`（`blob_stream()` 的头部区段）
+- Test: `tests/t20_direct.php`（追加）
 
 **Interfaces:**
 - Consumes: `mime_inline_ok()`（Task 1）
@@ -174,7 +174,7 @@ git commit -m "feat: 内联类型白名单 mime_inline_ok()"
 
 - [ ] **Step 1: 写失败的测试**
 
-在 `tests/t15_direct.php` 的 `finish();` 之前插入：
+在 `tests/t20_direct.php` 的 `finish();` 之前插入：
 
 ```php
 // ------------------------------------------------- blob_stream 的守卫与 HEAD
@@ -182,14 +182,17 @@ git commit -m "feat: 内联类型白名单 mime_inline_ok()"
 $storage = (string) file_get_contents(BASE_PATH . '/app/lib/storage.php');
 check(str_contains($storage, 'mime_inline_ok($mime)'),
     'blob_stream 应用 mime_inline_ok 守卫内联');
-check(str_contains($storage, "'HEAD'"),
-    'blob_stream 应处理 HEAD 请求');
 check(
     strpos($storage, 'mime_inline_ok($mime)') < strpos($storage, "header('Content-Disposition: '"),
     '守卫必须在写 Content-Disposition 之前生效'
 );
+
+// 必须匹配完整的 HEAD 守卫表达式。只找 "'HEAD'" 会命中 blob_direct_url 里的
+// s3_request($config, 'HEAD', ...)，那处在 Content-Disposition 之前，顺序断言会假挂。
+$headGuard = "\$_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD'";
+check(str_contains($storage, $headGuard), 'blob_stream 应短路 HEAD');
 check(
-    strpos($storage, "'HEAD'") > strpos($storage, "header('Content-Disposition: '"),
+    strpos($storage, $headGuard) > strpos($storage, "header('Content-Disposition: '"),
     'HEAD 短路必须写在 header 块之后（否则会漏掉 Content-Length）'
 );
 ```
@@ -197,7 +200,7 @@ check(
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: FAIL — 4 条 `FAIL`（`mime_inline_ok($mime)` 与 `'HEAD'` 尚未出现在 storage.php）
@@ -260,7 +263,7 @@ Expected: FAIL — 4 条 `FAIL`（`mime_inline_ok($mime)` 与 `'HEAD'` 尚未出
 - [ ] **Step 4: 跑测试确认通过**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: 全部 `ok`
@@ -276,7 +279,7 @@ Expected: 全部通过（`blob_stream` 签名未变）
 - [ ] **Step 6: 提交**
 
 ```bash
-git add app/lib/storage.php tests/t15_direct.php
+git add app/lib/storage.php tests/t20_direct.php
 git commit -m "fix: blob_stream 内联白名单守卫与 HEAD 支持
 
 shares.raw 是公开路由，把文件原始 MIME 原样作为 Content-Type 发出，
@@ -288,8 +291,8 @@ shares.raw 是公开路由，把文件原始 MIME 原样作为 Content-Type 发�
 ## Task 3: `blob_direct_url()` / `blob_deliver()` 加 `$disposition`
 
 **Files:**
-- Modify: `app/lib/storage.php:241`（`blob_direct_url()` 签名）、`app/lib/storage.php:263-273`（`s3_presign` 调用）、`app/lib/storage.php:280-292`（`blob_deliver()`）
-- Test: `tests/t15_direct.php`（追加）
+- Modify: `app/lib/storage.php:241`（`blob_direct_url()` 签名）、`app/lib/storage.php:263-274`（`s3_presign` 调用）、`app/lib/storage.php:280-293`（`blob_deliver()`）
+- Test: `tests/t20_direct.php`（追加）
 
 **Interfaces:**
 - Consumes: 无
@@ -299,7 +302,7 @@ shares.raw 是公开路由，把文件原始 MIME 原样作为 Content-Type 发�
 
 - [ ] **Step 1: 写失败的测试**
 
-在 `tests/t15_direct.php` 的 `finish();` 之前插入：
+在 `tests/t20_direct.php` 的 `finish();` 之前插入：
 
 ```php
 // ------------------------------------------- blob_direct_url 的 disposition
@@ -332,7 +335,7 @@ check($refD->getParameters()[5]->getDefaultValue() === 'attachment',
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: FAIL — 参数不存在（`ArgumentCountError` 或反射断言失败）
@@ -382,7 +385,7 @@ function blob_deliver(int $userId, int $blobId, string $mime, string $filename, 
 - [ ] **Step 4: 跑测试确认通过**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php && runuser -u www -- php tests/t8_deliver.php
+runuser -u www -- php tests/t20_direct.php && runuser -u www -- php tests/t8_deliver.php
 ```
 
 Expected: 两个文件都全部通过（既有调用方用的是默认值，行为不变）
@@ -390,7 +393,7 @@ Expected: 两个文件都全部通过（既有调用方用的是默认值，行�
 - [ ] **Step 5: 提交**
 
 ```bash
-git add app/lib/storage.php tests/t15_direct.php
+git add app/lib/storage.php tests/t20_direct.php
 git commit -m "feat: blob_direct_url / blob_deliver 支持 disposition 参数"
 ```
 
@@ -400,7 +403,7 @@ git commit -m "feat: blob_direct_url / blob_deliver 支持 disposition 参数"
 
 **Files:**
 - Modify: `app/schema.php:13`（`SCHEMA_VERSION`）、`app/schema.php` 末尾 `return $sql;` 之前
-- Test: `tests/t15_direct.php`（追加）
+- Test: `tests/t20_direct.php`（追加）
 
 **Interfaces:**
 - Consumes: 无
@@ -408,7 +411,7 @@ git commit -m "feat: blob_direct_url / blob_deliver 支持 disposition 参数"
 
 - [ ] **Step 1: 写失败的测试**
 
-在 `tests/t15_direct.php` 的 `finish();` 之前插入：
+在 `tests/t20_direct.php` 的 `finish();` 之前插入：
 
 ```php
 // ------------------------------------------------------------ direct_links 表
@@ -455,17 +458,17 @@ check($nullsT4['expires_at'] === 'YES', 'expires_at 应可空');
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: FAIL — `direct_links 表应已创建` 及后续列断言
 
 - [ ] **Step 3: 加表与版本号**
 
-`app/schema.php:13` 改为：
+`app/schema.php:13` 改为（当前值是 **10**，不是 6——期间已有别的功能把版本推到 10）：
 
 ```php
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 11;
 ```
 
 在 `app/schema.php` 末尾 `return $sql;` 之前插入：
@@ -494,7 +497,7 @@ const SCHEMA_VERSION = 7;
 - [ ] **Step 4: 跑测试确认通过**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php && runuser -u www -- php tests/t1_schema.php
+runuser -u www -- php tests/t20_direct.php && runuser -u www -- php tests/t1_schema.php
 ```
 
 Expected: 两个都全部通过
@@ -502,7 +505,7 @@ Expected: 两个都全部通过
 - [ ] **Step 5: 提交**
 
 ```bash
-git add app/schema.php tests/t15_direct.php
+git add app/schema.php tests/t20_direct.php
 git commit -m "feat: direct_links 表（SCHEMA_VERSION 7）"
 ```
 
@@ -512,8 +515,8 @@ git commit -m "feat: direct_links 表（SCHEMA_VERSION 7）"
 
 **Files:**
 - Create: `app/lib/directs.php`
-- Modify: `app/bootstrap.php:48`（在 `lib/shares.php` 之后装载）
-- Test: `tests/t15_direct.php`（追加）
+- Modify: `app/bootstrap.php:49`（在 `lib/shares.php` 之后装载）
+- Test: `tests/t20_direct.php`（追加）
 
 **Interfaces:**
 - Consumes: `random_token()`（`app/helpers.php:159`）
@@ -527,7 +530,7 @@ git commit -m "feat: direct_links 表（SCHEMA_VERSION 7）"
 
 - [ ] **Step 1: 写失败的测试**
 
-在 `tests/t15_direct.php` 的 `finish();` 之前插入：
+在 `tests/t20_direct.php` 的 `finish();` 之前插入：
 
 ```php
 // ---------------------------------------------------------- directs 基础件
@@ -597,7 +600,7 @@ check(direct_find(str_repeat('a', 32)) === null, '未入库的令牌应返回 nu
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: FAIL — `Call to undefined function direct_token()`
@@ -767,7 +770,7 @@ require BASE_PATH . '/app/lib/directs.php';
 - [ ] **Step 4: 跑测试确认通过**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: 全部 `ok`
@@ -775,7 +778,7 @@ Expected: 全部 `ok`
 - [ ] **Step 5: 提交**
 
 ```bash
-git add app/lib/directs.php app/bootstrap.php tests/t15_direct.php
+git add app/lib/directs.php app/bootstrap.php tests/t20_direct.php
 git commit -m "feat: 直链基础件（令牌、IP 匹配、存活判定、查找）"
 ```
 
@@ -785,7 +788,7 @@ git commit -m "feat: 直链基础件（令牌、IP 匹配、存活判定、查�
 
 **Files:**
 - Modify: `app/lib/directs.php`（在 `direct_public()` 之前插入）
-- Test: `tests/t15_direct.php`（追加）
+- Test: `tests/t20_direct.php`（追加）
 
 **Interfaces:**
 - Consumes: `direct_find()` / `direct_is_live()` / `direct_ip_ok()`（Task 5）、`node_get()` / `node_in_private()`（`app/lib/nodes.php`）
@@ -793,7 +796,7 @@ git commit -m "feat: 直链基础件（令牌、IP 匹配、存活判定、查�
 
 - [ ] **Step 1: 写失败的测试**
 
-在 `tests/t15_direct.php` 的 `finish();` 之前插入：
+在 `tests/t20_direct.php` 的 `finish();` 之前插入：
 
 ```php
 // -------------------------------------------------------- direct_resolve
@@ -912,7 +915,7 @@ check(direct_resolve($tkOk, '203.0.113.1')['ok'] === true, '未被撤销的那�
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: FAIL — `Call to undefined function direct_resolve()`
@@ -969,7 +972,7 @@ function direct_resolve(string $token, string $ip): array
 - [ ] **Step 4: 跑测试确认通过**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: 全部 `ok`
@@ -977,7 +980,7 @@ Expected: 全部 `ok`
 - [ ] **Step 5: 提交**
 
 ```bash
-git add app/lib/directs.php tests/t15_direct.php
+git add app/lib/directs.php tests/t20_direct.php
 git commit -m "feat: direct_resolve() 准入判定"
 ```
 
@@ -987,8 +990,8 @@ git commit -m "feat: direct_resolve() 准入判定"
 
 **Files:**
 - Create: `app/modules/direct.php`
-- Modify: `app/router.php:17-32`（`PUBLIC_ROUTES`）、`app/lib/activity.php`（`activity_label()` 补两条）
-- Test: `tests/t15_direct.php`（追加源码扫描）
+- Modify: `app/router.php:16-33`（`PUBLIC_ROUTES`）、`app/lib/activity.php`（`activity_label()` 补两条）
+- Test: `tests/t20_direct.php`（追加源码扫描）
 
 **Interfaces:**
 - Consumes: `direct_resolve()`（Task 6）、`direct_public()` / `direct_token()` / `direct_normalize_ip()`（Task 5）、`blob_deliver()`（Task 3）、`mime_inline_ok()`（Task 1）
@@ -996,7 +999,7 @@ git commit -m "feat: direct_resolve() 准入判定"
 
 - [ ] **Step 1: 写失败的测试**
 
-在 `tests/t15_direct.php` 的 `finish();` 之前插入：
+在 `tests/t20_direct.php` 的 `finish();` 之前插入：
 
 ```php
 // ------------------------------------------------------------- 路由与装载
@@ -1016,8 +1019,15 @@ check(str_contains($mod, 'require_csrf()'), '写接口应校验 CSRF');
 check(str_contains($mod, "'Allow: GET, HEAD'"), 'serve 应声明 Allow 头');
 check(str_contains($mod, 'mime_inline_ok($mime)'), 'serve 应用内联白名单决定 disposition');
 
-// 直链绝不写操作日志（视频拖动进度条会高频命中）
-check(!str_contains($mod, "activity_log"), 'direct_serve 不得写 activity_log');
+// 直链绝不写操作日志（视频拖动进度条会高频命中）。
+// 不能整文件扫 activity_log——direct_create / direct_revoke 是正当要写的，
+// 只有 direct_serve 不能写。所以切出 direct_serve 的函数体再查。
+$serveStart = strpos($mod, 'function direct_serve');
+$serveEnd = strpos($mod, 'function direct_create');
+check($serveStart !== false && $serveEnd !== false && $serveEnd > $serveStart,
+    'direct.php 应含 direct_serve 且其后的 direct_create');
+$serveBody = substr($mod, (int) $serveStart, (int) $serveEnd - (int) $serveStart);
+check(!str_contains($serveBody, 'activity_log'), 'direct_serve 不得写 activity_log');
 
 // activity_label 覆盖新动作
 $act = (string) file_get_contents(BASE_PATH . '/app/lib/activity.php');
@@ -1028,7 +1038,7 @@ check(str_contains($act, "'direct.revoke'"), 'activity_label 应覆盖 direct.re
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: FAIL — `direct.serve 应登记进 PUBLIC_ROUTES` 等（`direct.php` 尚不存在，`file_get_contents` 会告警并返回空串）
@@ -1176,7 +1186,7 @@ function direct_revoke(): void
 - [ ] **Step 5: 跑测试确认通过**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: 全部 `ok`
@@ -1192,7 +1202,7 @@ Expected: 四个都 `No syntax errors detected`
 - [ ] **Step 7: 提交**
 
 ```bash
-git add app/modules/direct.php app/router.php app/lib/activity.php tests/t15_direct.php
+git add app/modules/direct.php app/router.php app/lib/activity.php tests/t20_direct.php
 git commit -m "feat: direct.serve 公开路由与直链管理接口"
 ```
 
@@ -1201,9 +1211,9 @@ git commit -m "feat: direct.serve 公开路由与直链管理接口"
 ## Task 8: 节点角标 `direct_count`
 
 **Files:**
-- Modify: `app/lib/nodes.php:125-131`（`$sharedMap` 之后）、`app/lib/nodes.php:176`（`$row['share_count']` 旁）、`app/lib/nodes.php:758`（`node_public()` 的 `shareCount` 旁）
-- Modify: `assets/js/files.js:72`
-- Test: `tests/t15_direct.php`（追加）
+- Modify: `app/lib/nodes.php:151-177`（`$sharedMap` 之后）、`app/lib/nodes.php:219`（`$row['share_count']` 旁）、`app/lib/nodes.php:832`（`node_public()` 的 `shareCount` 旁）
+- Modify: `assets/js/files.js:169`
+- Test: `tests/t20_direct.php`（追加）
 
 **Interfaces:**
 - Consumes: `direct_links` 表（Task 4）
@@ -1211,7 +1221,7 @@ git commit -m "feat: direct.serve 公开路由与直链管理接口"
 
 - [ ] **Step 1: 写失败的测试**
 
-在 `tests/t15_direct.php` 的 `finish();` 之前插入：
+在 `tests/t20_direct.php` 的 `finish();` 之前插入：
 
 ```php
 // ------------------------------------------------------------ 节点角标计数
@@ -1255,14 +1265,14 @@ check(str_contains($js, "icon('zap'"), 'files.js 应用 zap 图标做直链角�
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: FAIL — `node_public 应含 directCount`
 
 - [ ] **Step 3: 改 `nodes.php`**
 
-在 `app/lib/nodes.php` 的 `node_attach_meta()`（`app/lib/nodes.php:102`）里，`$sharedMap` 循环之后插入。这个函数是 `node_children` / `node_list` / `node_trash_list` / `node_favorites` 的公共出口，改一处四处都拿到：
+在 `app/lib/nodes.php` 的 `node_attach_meta()`（`app/lib/nodes.php:140`）里，`$sharedMap` 循环之后插入。这个函数是 `node_children` / `node_list` / `node_trash_list` / `node_favorites` 的公共出口，改一处四处都拿到：
 
 ```php
     $directMap = [];
@@ -1289,7 +1299,7 @@ Expected: FAIL — `node_public 应含 directCount`
 
 - [ ] **Step 4: 改 `files.js`**
 
-`assets/js/files.js:72`，把：
+`assets/js/files.js:169`，把：
 
 ```js
         if (n.shareCount > 0) out += '<span class="badge" title="已分享">' + icon('link-2', 'badge__ico') + '</span>';
@@ -1305,7 +1315,7 @@ Expected: FAIL — `node_public 应含 directCount`
 - [ ] **Step 5: 跑测试确认通过**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php && runuser -u www -- php tests/t13_ui.php
+runuser -u www -- php tests/t20_direct.php && runuser -u www -- php tests/t13_ui.php
 ```
 
 Expected: 两个都全部通过
@@ -1313,7 +1323,7 @@ Expected: 两个都全部通过
 - [ ] **Step 6: 提交**
 
 ```bash
-git add app/lib/nodes.php assets/js/files.js tests/t15_direct.php
+git add app/lib/nodes.php assets/js/files.js tests/t20_direct.php
 git commit -m "feat: 文件卡片直链角标"
 ```
 
@@ -1325,7 +1335,7 @@ git commit -m "feat: 文件卡片直链角标"
 - Modify: `app/modules/shares.php:12-62`（`shares_list()`）
 - Modify: `app/views/shares.php`
 - Modify: `assets/js/console.js`
-- Test: `tests/t15_direct.php`（追加源码扫描）
+- Test: `tests/t20_direct.php`（追加源码扫描）
 
 **Interfaces:**
 - Consumes: `direct_public()`（Task 5）、`direct_links` 表（Task 4）
@@ -1333,7 +1343,7 @@ git commit -m "feat: 文件卡片直链角标"
 
 - [ ] **Step 1: 写失败的测试**
 
-在 `tests/t15_direct.php` 的 `finish();` 之前插入：
+在 `tests/t20_direct.php` 的 `finish();` 之前插入：
 
 ```php
 // --------------------------------------------------------- 分享页直链标签
@@ -1359,7 +1369,7 @@ check(str_contains($consoleJs, 'data-direct-copy'), 'console.js 应处理直链�
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: FAIL — `shares_list 应查 direct_links`
@@ -1568,7 +1578,7 @@ Expected: FAIL — `shares_list 应查 direct_links`
 - [ ] **Step 6: 跑测试确认通过**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: 全部 `ok`
@@ -1576,7 +1586,7 @@ Expected: 全部 `ok`
 - [ ] **Step 7: 提交**
 
 ```bash
-git add app/modules/shares.php app/views/shares.php assets/js/console.js tests/t15_direct.php
+git add app/modules/shares.php app/views/shares.php assets/js/console.js tests/t20_direct.php
 git commit -m "feat: 分享页直链标签"
 ```
 
@@ -1585,8 +1595,8 @@ git commit -m "feat: 分享页直链标签"
 ## Task 10: 文件列表右键「直链」面板
 
 **Files:**
-- Modify: `assets/js/files.js:759`（菜单项）、`assets/js/files.js:1016`（case 分派）
-- Test: `tests/t15_direct.php`（追加源码扫描）
+- Modify: `assets/js/files.js:860`（菜单项）、`assets/js/files.js:1117`（case 分派）
+- Test: `tests/t20_direct.php`（追加源码扫描）
 
 **Interfaces:**
 - Consumes: `direct.create`（Task 7）、`direct_public()` 的 `url` / `urlDownload` 字段（Task 5）
@@ -1594,7 +1604,7 @@ git commit -m "feat: 分享页直链标签"
 
 - [ ] **Step 1: 写失败的测试**
 
-在 `tests/t15_direct.php` 的 `finish();` 之前插入：
+在 `tests/t20_direct.php` 的 `finish();` 之前插入：
 
 ```php
 // ----------------------------------------------------- 文件列表右键面板
@@ -1616,7 +1626,7 @@ check($fileBlock !== false && $directItem > $fileBlock,
 - [ ] **Step 2: 跑测试确认失败**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php
+runuser -u www -- php tests/t20_direct.php
 ```
 
 Expected: FAIL — `右键菜单应有「直链」项`
@@ -1641,7 +1651,7 @@ Expected: FAIL — `右键菜单应有「直链」项`
 
 - [ ] **Step 4: 写 `doDirect()`**
 
-在 `assets/js/files.js` 里 `doShare()`（`assets/js/files.js:658`）之后新增。写法照抄 `doShare()` 的弹窗与错误处理模式：
+在 `assets/js/files.js` 里 `doShare()`（`assets/js/files.js:759`）之后新增。写法照抄 `doShare()` 的弹窗与错误处理模式：
 
 ```js
     /* 直链：免登录、无落地页的取文件地址 */
@@ -1715,7 +1725,7 @@ Expected: FAIL — `右键菜单应有「直链」项`
 - [ ] **Step 5: 跑测试确认通过**
 
 ```bash
-runuser -u www -- php tests/t15_direct.php && runuser -u www -- php tests/t13_ui.php
+runuser -u www -- php tests/t20_direct.php && runuser -u www -- php tests/t13_ui.php
 ```
 
 Expected: 两个都全部通过
@@ -1723,7 +1733,7 @@ Expected: 两个都全部通过
 - [ ] **Step 6: 提交**
 
 ```bash
-git add assets/js/files.js tests/t15_direct.php
+git add assets/js/files.js tests/t20_direct.php
 git commit -m "feat: 文件列表右键获取直链"
 ```
 
@@ -1877,7 +1887,7 @@ git commit -m "test: 直链端到端验证结论"
 
 ## 完成标准
 
-- `runuser -u www -- php tests/t15_direct.php` 全部通过
+- `runuser -u www -- php tests/t20_direct.php` 全部通过
 - `runuser -u www -- php tests/t1_schema.php`、`t8_deliver.php`、`t13_ui.php` 全部通过（回归）
 - 未登录 `curl` 能取到直链字节，支持 Range 与 HEAD
 - `.html` / `.svg` 直链返回 `attachment`，`.jpg` 返回 `inline`
