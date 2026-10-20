@@ -133,4 +133,67 @@ foreach (q_all('SHOW COLUMNS FROM direct_links') as $row) {
 check($nullsT4['ip_allow'] === 'YES', 'ip_allow 应可空');
 check($nullsT4['expires_at'] === 'YES', 'expires_at 应可空');
 
+// ---------------------------------------------------------- directs 基础件
+
+// 令牌
+$tk = direct_token();
+check(preg_match('/^[a-f0-9]{32}$/', $tk) === 1, '令牌应为 32 位小写十六进制');
+check(direct_token() !== direct_token(), '两次令牌应不同');
+
+// IP 规范化
+check(direct_normalize_ip('203.0.113.7') === '203.0.113.7', 'IPv4 单地址应原样通过');
+check(direct_normalize_ip('203.0.113.0/24') === '203.0.113.0/24', 'IPv4 CIDR 应通过');
+check(direct_normalize_ip('  203.0.113.7  ') === '203.0.113.7', '应去除首尾空白');
+check(direct_normalize_ip('2001:db8::1') === '2001:db8::1', 'IPv6 单地址应通过');
+check(direct_normalize_ip('') === null, '空串应返回 null');
+check(direct_normalize_ip('203.0.113.0/33') === null, '掩码超 32 应拒绝');
+check(direct_normalize_ip('999.1.1.1') === null, '非法 IPv4 应拒绝');
+check(direct_normalize_ip('2001:db8::/32') === null, 'IPv6 CIDR 应拒绝');
+check(direct_normalize_ip('随便写点中文') === null, '乱码应拒绝');
+check(direct_normalize_ip('203.0.113.0/abc') === null, '非数字掩码应拒绝');
+
+// IP 匹配
+$rowNoIp = ['ip_allow' => null];
+check(direct_ip_ok($rowNoIp, '198.51.100.9'), 'ip_allow 为空应放行任何来源');
+check(direct_ip_ok(['ip_allow' => ''], '198.51.100.9'), 'ip_allow 为空串应放行');
+
+$rowIp = ['ip_allow' => '203.0.113.7'];
+check(direct_ip_ok($rowIp, '203.0.113.7'), '单 IP 命中');
+check(!direct_ip_ok($rowIp, '203.0.113.8'), '单 IP 不中');
+// 前缀比较陷阱：203.0.113.7 不得匹配 203.0.113.70
+check(!direct_ip_ok($rowIp, '203.0.113.70'), '不得退化为字符串前缀比较');
+
+$rowCidr = ['ip_allow' => '203.0.113.0/24'];
+check(direct_ip_ok($rowCidr, '203.0.113.7'), 'CIDR 内应命中');
+check(direct_ip_ok($rowCidr, '203.0.113.255'), 'CIDR 边界应命中');
+check(!direct_ip_ok($rowCidr, '203.0.114.1'), 'CIDR 外不应命中');
+
+// CIDR 边界：/0 全放行，/32 只放行一个
+check(direct_ip_ok(['ip_allow' => '0.0.0.0/0'], '198.51.100.9'), '/0 应放行任何 IPv4');
+check(direct_ip_ok(['ip_allow' => '203.0.113.7/32'], '203.0.113.7'), '/32 应命中自身');
+check(!direct_ip_ok(['ip_allow' => '203.0.113.7/32'], '203.0.113.8'), '/32 不应命中邻居');
+
+// 非字节对齐的掩码：/25
+check(direct_ip_ok(['ip_allow' => '203.0.113.0/25'], '203.0.113.127'), '/25 上半段应命中');
+check(!direct_ip_ok(['ip_allow' => '203.0.113.0/25'], '203.0.113.128'), '/25 下半段不应命中');
+
+// IPv6
+check(direct_ip_ok(['ip_allow' => '2001:db8::1'], '2001:db8::1'), 'IPv6 精确命中');
+check(!direct_ip_ok(['ip_allow' => '2001:db8::1'], '2001:db8::2'), 'IPv6 不中');
+
+// 存活判定
+check(direct_is_live(['status' => 'active', 'expires_at' => null]), '无过期应存活');
+check(!direct_is_live(['status' => 'revoked', 'expires_at' => null]), '已撤销不应存活');
+check(direct_is_live(['status' => 'active', 'expires_at' => date('Y-m-d H:i:s', time() + 3600)]),
+    '未过期应存活');
+check(!direct_is_live(['status' => 'active', 'expires_at' => date('Y-m-d H:i:s', time() - 60)]),
+    '已过期不应存活');
+
+// 查找
+check(direct_find('') === null, '空令牌应返回 null');
+check(direct_find('zzzz') === null, '格式非法应返回 null');
+check(direct_find(strtoupper($tk)) === null,
+    '大写令牌返回 null——random_token 只产小写，校验正则也拒绝大写');
+check(direct_find(str_repeat('a', 32)) === null, '未入库的令牌应返回 null');
+
 finish();
