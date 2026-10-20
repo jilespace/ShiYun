@@ -910,6 +910,7 @@ check($linkCountT6 >= 3, '同一文件应能挂多条直链');
 // 其中 $tkRev 已撤销，$tkOk 仍生效——撤销一条不影响另一条
 check(direct_resolve($tkRev, '203.0.113.1')['ok'] === false, '被撤销的那条仍应拒绝');
 check(direct_resolve($tkOk, '203.0.113.1')['ok'] === true, '未被撤销的那条不受影响');
+```
 
 
 - [ ] **Step 2: 跑测试确认失败**
