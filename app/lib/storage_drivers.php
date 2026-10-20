@@ -64,36 +64,18 @@ function ip_to_uint(string $ip): int
     return $long === false ? -1 : (int) sprintf('%u', $long);
 }
 
-/**
- * 高危地址告警（非阻塞）：命中回环/私网/链路本地/云元数据时返回警示文案，否则 null。
- * 仅做字符串与 IP 判断，不做 DNS 解析，避免额外网络往返与阻塞。
- */
-function host_risk_note(string $host): ?string
+/** IP 是否落在回环 / 私网 / 链路本地 / CGNAT / 云元数据区间 */
+function ip_is_private(string $ip): bool
 {
-    $host = strtolower(trim($host));
-    if ($host === '') {
-        return null;
-    }
-    $host = trim($host, '[]');
-    // 仅对非 IPv6 的 "主机:端口" 去端口；否则会把 ::1 / fe80::1 这类地址截断为空
-    if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false && str_contains($host, ':')) {
-        $host = explode(':', $host)[0];
-    }
-    if ($host === '') {
-        return null;
+    $ip = trim(trim($ip), '[]');
+    if ($ip === '') {
+        return false;
     }
 
-    $note = '该地址指向内网 / 本机，若作为公网服务请确认安全风险。';
-
-    if ($host === 'localhost' || $host === 'metadata.google.internal'
-        || str_ends_with($host, '.internal') || str_ends_with($host, '.local')) {
-        return $note;
-    }
-
-    if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
-        $u = ip_to_uint($host);
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+        $u = ip_to_uint($ip);
         if ($u < 0) {
-            return null;
+            return false;
         }
         foreach ([
             ['127.0.0.0', '127.255.255.255'],    // 回环
@@ -105,20 +87,83 @@ function host_risk_note(string $host): ?string
             ['0.0.0.0', '0.255.255.255'],
         ] as [$from, $to]) {
             if ($u >= ip_to_uint($from) && $u <= ip_to_uint($to)) {
-                return $note;
+                return true;
             }
         }
-        return null;
+        return false;
     }
 
-    if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
-        if ($host === '::1' || str_starts_with($host, 'fc') || str_starts_with($host, 'fd')
-            || str_starts_with($host, 'fe80')) {
-            return $note;
+    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false) {
+        return $ip === '::1'
+            || str_starts_with($ip, 'fc') || str_starts_with($ip, 'fd')
+            || str_starts_with($ip, 'fe80');
+    }
+
+    return false;
+}
+
+/** 主机名是否指向本机 / 内网。只做字符串与 IP 判断，不做 DNS 解析。 */
+function host_is_private(string $host): bool
+{
+    $host = strtolower(trim($host));
+    if ($host === '') {
+        return false;
+    }
+    $host = trim($host, '[]');
+    // 仅对非 IPv6 的 "主机:端口" 去端口；否则会把 ::1 / fe80::1 这类地址截断为空
+    if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false && str_contains($host, ':')) {
+        $host = explode(':', $host)[0];
+    }
+    if ($host === '') {
+        return false;
+    }
+
+    if ($host === 'localhost' || $host === 'metadata.google.internal'
+        || str_ends_with($host, '.internal') || str_ends_with($host, '.local')) {
+        return true;
+    }
+
+    return ip_is_private($host);
+}
+
+/**
+ * 高危地址告警（非阻塞）：命中回环/私网/链路本地/云元数据时返回警示文案，否则 null。
+ * 判断逻辑在 host_is_private()，这里只是换成给人看的说法。
+ */
+function host_risk_note(string $host): ?string
+{
+    return host_is_private($host) ? '该地址指向内网 / 本机，若作为公网服务请确认安全风险。' : null;
+}
+
+/**
+ * 把主机名解析成 IP 列表。
+ *
+ * 离线下载光看主机名挡不住「域名解析到 127.0.0.1」这类走法，必须再解析一次。
+ */
+function host_resolve_ips(string $host): array
+{
+    $host = trim(trim($host), '[]');
+    if ($host === '') {
+        return [];
+    }
+    if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+        return [$host];
+    }
+
+    $ips = [];
+    $v4 = @gethostbynamel($host);
+    if (is_array($v4)) {
+        $ips = $v4;
+    }
+    $records = @dns_get_record($host, DNS_AAAA);
+    if (is_array($records)) {
+        foreach ($records as $r) {
+            if (!empty($r['ipv6'])) {
+                $ips[] = (string) $r['ipv6'];
+            }
         }
     }
-
-    return null;
+    return $ips;
 }
 
 /**

@@ -165,7 +165,14 @@ function api_token_user_from_string(string $token): ?array
     }
     q_exec('UPDATE api_tokens SET last_used_at = ? WHERE id = ?', [now(), (int) $row['id']]);
 
-    return find_user_by_id((int) $row['user_id']);
+    // 停用的账号必须在这里就挡掉。Basic 分支查了 status，令牌分支不查的话，
+    // 一个被停用的账号只要手里还有令牌，就照样能经 WebDAV 读、写、删。
+    $user = find_user_by_id((int) $row['user_id']);
+    if ($user === null || $user['status'] !== 'active') {
+        return null;
+    }
+
+    return $user;
 }
 
 /** 取出 WebDAV 子路径 */

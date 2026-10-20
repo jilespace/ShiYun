@@ -393,7 +393,18 @@ function auth_do_reset(string $token): void
     $userId = (int) $row['user_id'];
     change_password($userId, $password);
     q_update('password_resets', ['used_at' => now()], 'id = ?', [(int) $row['id']]);
+    revoke_other_sessions($userId);
     activity_log($userId, 'password.reset');
+
+    // 重置密码不等于通过第二因子。开了两步验证的账号必须再走一次验证码，
+    // 否则任何一个拿到重置链接的人（邮箱被攻破、或本机开了 reset_link_in_response）
+    // 都能直接接管账号，TOTP 形同虚设。
+    if (auth_totp_required($userId)) {
+        $_SESSION['pending_2fa'] = $userId;
+        $_SESSION['pending_2fa_at'] = time();
+        redirect(url('auth.totp'));
+    }
+
     log_login($userId, (string) q_val('SELECT email FROM users WHERE id = ?', [$userId]), 'success', '重置密码后登录');
 
     Auth::login($userId);

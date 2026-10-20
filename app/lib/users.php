@@ -178,7 +178,42 @@ function user_add_usage(int $userId, int $delta): void
     );
 }
 
-/** 剩余空间不足则抛错 */
+/**
+ * 已收但尚未合并的分片占用的磁盘。
+ *
+ * 这些字节躺在 runtime/chunks 里，不计入 users.used_bytes，却实实在在占着盘。
+ * 不把它们算进配额，就能靠「反复初始化分片会话、永不合并」把磁盘写满而配额毫不知情。
+ * status='merging' 的会话已停止累积（正在合并），不计入。
+ */
+function in_flight_chunk_bytes(int $userId): int
+{
+    return (int) q_val(
+        "SELECT COALESCE(SUM(received_bytes), 0) FROM upload_sessions
+         WHERE user_id = ? AND status IN ('pending', 'uploading')",
+        [$userId]
+    );
+}
+
+/**
+ * 原子地占用配额：够则加、不够则不加，返回是否成功。
+ *
+ * 与 assert_quota() 的区别是「先写后判」——条件写在 UPDATE 的 WHERE 里，
+ * 并发的两个请求不可能同时通过。assert_quota() 是先看后写，只适合当作
+ * 动手之前的友好预检。
+ */
+function quota_claim(int $userId, int $bytes): bool
+{
+    if ($bytes <= 0) {
+        return true;
+    }
+    return q_exec(
+        'UPDATE users SET used_bytes = used_bytes + ?
+         WHERE id = ? AND (quota_bytes = 0 OR used_bytes + ? <= quota_bytes)',
+        [$bytes, $userId, $bytes]
+    ) === 1;
+}
+
+/** 剩余空间不足则抛错（软预检；真正的把关在 quota_claim()） */
 function assert_quota(int $userId, int $incomingBytes): void
 {
     $u = find_user_by_id($userId);
@@ -186,7 +221,11 @@ function assert_quota(int $userId, int $incomingBytes): void
         throw new RuntimeException('用户不存在');
     }
     $quota = (int) $u['quota_bytes'];
-    if ($quota > 0 && (int) $u['used_bytes'] + $incomingBytes > $quota) {
+    if ($quota <= 0) {
+        return;
+    }
+    $used = (int) $u['used_bytes'] + in_flight_chunk_bytes($userId);
+    if ($used + $incomingBytes > $quota) {
         throw new RuntimeException('存储空间不足，请清理文件或扩容。');
     }
 }
@@ -201,8 +240,16 @@ function change_password(int $userId, string $newPassword): void
     ], 'id = ?', [$userId]);
 }
 
-/** 修改密码后使其他会话失效 */
+/**
+ * 让该账号在其它设备上的会话失效。
+ *
+ * 做法是把 users.session_epoch 加一：每个会话在登录时记下当时的纪元，
+ * Auth::user() 每次都会比对，对不上就登出。当前这个会话要留在登录态，
+ * 所以同步把 $_SESSION 里的纪元也改成新值——否则用户改完密码先把自己踢下线。
+ */
 function revoke_other_sessions(int $userId): void
 {
-    $_SESSION['auth_epoch'] = time();
+    q_exec('UPDATE users SET session_epoch = session_epoch + 1 WHERE id = ?', [$userId]);
+    $_SESSION['auth_epoch'] = (int) q_val('SELECT session_epoch FROM users WHERE id = ?', [$userId]);
+    Auth::refresh();
 }

@@ -95,7 +95,13 @@ function rss_authenticate(string $token): ?array
 
     q_exec('UPDATE api_tokens SET last_used_at = ? WHERE token_hash = ?', [now(), hash('sha256', $token)]);
 
-    return find_user_by_id((int) $row['user_id']);
+    // 同 WebDAV：令牌有效不代表账号还能用
+    $user = find_user_by_id((int) $row['user_id']);
+    if ($user === null || $user['status'] !== 'active') {
+        return null;
+    }
+
+    return $user;
 }
 
 /** @return list<array{title:string,link:string,guid:string,ts:int,description:string}> */

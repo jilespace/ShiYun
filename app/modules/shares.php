@@ -26,24 +26,26 @@ function shares_list(): void
     $items = [];
     foreach ($rows as $row) {
         $share = share_public($row);
-        $share['node'] = node_public($row + [
-            'id' => (int) $row['node_id'],
-            'name' => (string) $row['node_name'],
-            'kind' => (string) $row['node_kind'],
-            'size' => (int) $row['node_size'],
-            'ext' => $row['node_ext'],
-            'mime' => $row['node_mime'],
-            'parent_id' => null,
+        // 必须显式建数组，不能用 $row + [... ]：PHP 的 + 保留左侧同名的键，
+        // 而 $row 里的 id 是分享 id，会把 node_id 顶掉，节点 id 就成了分享 id。
+        $share['node'] = node_public([
+            'id'          => (int) $row['node_id'],
+            'parent_id'   => null,
+            'name'        => (string) $row['node_name'],
+            'kind'        => (string) $row['node_kind'],
+            'size'        => (int) $row['node_size'],
+            'mime'        => $row['node_mime'],
+            'ext'         => $row['node_ext'],
             'is_favorite' => 0,
-            'is_hidden' => 0,
-            'is_locked' => 0,
-            'is_private' => 0,
-            'color' => null,
-            'note' => null,
+            'is_hidden'   => 0,
+            'is_locked'   => 0,
+            'is_private'  => 0,
+            'color'       => null,
+            'note'        => null,
             'child_count' => (int) $row['child_count'],
-            'updated_at' => (string) $row['created_at'],
-            'created_at' => (string) $row['created_at'],
-            'deleted_at' => null,
+            'updated_at'  => (string) $row['created_at'],
+            'created_at'  => (string) $row['created_at'],
+            'deleted_at'  => null,
         ]);
         $items[] = $share;
     }
@@ -426,28 +428,48 @@ function shares_download(): void
         exit('该分享仅允许预览');
     }
 
-    q_exec('UPDATE shares SET download_count = download_count + 1 WHERE id = ?', [(int) $share['id']]);
-    share_visit((int) $share['id'], 'download', (int) $node['id']);
-    node_touch_access((int) $share['user_id'], (int) $node['id']);
+    // 落地页给文件夹里的每个文件都带上了 id，这里必须认。不认的话点单个文件
+    // 下载到的是整个文件夹的压缩包。只接受分享子树内的节点。
+    $target = $node;
+    $requested = input_int('id');
+    if ($requested > 0 && $requested !== (int) $node['id']) {
+        $candidate = node_get((int) $share['user_id'], $requested);
+        if ($candidate === null || $candidate['deleted_at'] !== null
+            || !str_starts_with((string) $candidate['path'], (string) $node['path'])) {
+            http_response_code(403);
+            exit('该文件不在分享范围内');
+        }
+        $target = $candidate;
+    }
 
-    if ($node['kind'] === 'file') {
-        if ($node['blob_id'] === null) {
+    // 私密空间里的东西一律不发。分享完全可能在文件被移进私密空间之前就建好了；
+    // 只跳过预签名（blob_deliver）而继续 blob_stream 等于根本没挡。
+    if (node_in_private((int) $share['user_id'], $target)) {
+        http_response_code(403);
+        exit('该内容不可下载');
+    }
+
+    q_exec('UPDATE shares SET download_count = download_count + 1 WHERE id = ?', [(int) $share['id']]);
+    share_visit((int) $share['id'], 'download', (int) $target['id']);
+    node_touch_access((int) $share['user_id'], (int) $target['id']);
+
+    if ($target['kind'] === 'file') {
+        if ($target['blob_id'] === null) {
             http_response_code(404);
             exit;
         }
-        $mime = (string) ($node['mime'] ?? 'application/octet-stream');
-        $name = (string) $node['name'];
-
-        // 私密空间不直链：shares_create() 只验归属、不排除私密空间，
-        // 且直链有效期内的通行证会绕过分享的撤销手段。
-        if (!node_in_private((int) $share['user_id'], $node)) {
-            blob_deliver((int) $share['user_id'], (int) $node['blob_id'], $mime, $name, 0);
-        }
-        blob_stream((int) $node['blob_id'], $mime, $name, false);
+        // blob_deliver 内部会在拿不到预签名 URL 时回落到 blob_stream，无需再补一次
+        blob_deliver(
+            (int) $share['user_id'],
+            (int) $target['blob_id'],
+            (string) ($target['mime'] ?? 'application/octet-stream'),
+            (string) $target['name'],
+            0
+        );
     }
 
     // 文件夹：交给通用打包逻辑，用分享者的身份读文件
-    zip_stream_nodes((int) $share['user_id'], [$node], safe_zip_name((string) $node['name']) . '.zip');
+    zip_stream_nodes((int) $share['user_id'], [$target], safe_zip_name((string) $target['name']) . '.zip');
 }
 
 /** 分享内容的原始流（图片/视频/PDF 内联预览） */
@@ -463,6 +485,11 @@ function shares_raw(): void
         exit;
     }
     if (!share_unlocked($share) || $node['kind'] !== 'file' || $node['blob_id'] === null) {
+        http_response_code(403);
+        exit;
+    }
+    // 私密空间内容连内联预览都不给（同 shares_download）
+    if (node_in_private((int) $share['user_id'], $node)) {
         http_response_code(403);
         exit;
     }
@@ -543,7 +570,8 @@ function shares_upload(): void
         if ($isInbox) {
             q_exec('UPDATE shares SET upload_count = GREATEST(0, upload_count - 1) WHERE id = ?', [(int) $share['id']]);
         }
-        json_fail('写入失败：' . $e->getMessage(), 500);
+        error_log('分享上传写入失败：' . $e->getMessage());
+        json_fail('写入失败：' . safe_error_message($e, '请稍后重试。'), 500);
     }
 
     // 收取箱记下投递者，主人在文件详情里能看到来源
@@ -741,6 +769,9 @@ function shares_upload_complete(): void
     $size = (int) filesize($merged);
     $ownerId = (int) $share['user_id'];
 
+    // 退出「在飞分片」统计，避免与随后的节点用量重复计入配额（同 upload_complete）
+    q_update('upload_sessions', ['status' => 'merging', 'updated_at' => now()], 'id = ?', [(int) $session['id']]);
+
     // 名额在合并成功后才扣：中途放弃的分片会话不会白占收取箱的额度
     if ($isInbox) {
         $reserved = q_exec(
@@ -762,7 +793,8 @@ function shares_upload_complete(): void
         if ($isInbox) {
             q_exec('UPDATE shares SET upload_count = GREATEST(0, upload_count - 1) WHERE id = ?', [(int) $share['id']]);
         }
-        json_fail('写入失败：' . $e->getMessage(), 500);
+        error_log('分享上传写入失败：' . $e->getMessage());
+        json_fail('写入失败：' . safe_error_message($e, '请稍后重试。'), 500);
     }
 
     if ($isInbox) {

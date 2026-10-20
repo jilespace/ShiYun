@@ -65,11 +65,15 @@ function upload_init(): void
     if ($hasHash) {
         $blob = blob_find($hash);
         if ($blob !== null && is_file(blob_path($hash))) {
+            // 必须自己取得一次引用。blob_ingest_file() 会做这件事，这条路径绕过了它，
+            // 不补的话 ref_count 少算一次：日后删除这个节点，blob_release() 会以为
+            // 引用已归零，把仍被别的文件引用的内容连同物理文件一起删掉。
+            $blobId = blob_acquire($hash, (int) $blob['size'], $blob['mime'] !== null ? (string) $blob['mime'] : null);
             $node = node_create_file(
                 $userId,
                 $parentId,
                 $name,
-                ['blob_id' => (int) $blob['id'], 'size' => (int) $blob['size'], 'hash' => $hash]
+                ['blob_id' => $blobId, 'size' => (int) $blob['size'], 'hash' => $hash]
             );
             activity_log($userId, 'file.upload', (int) $node['id'], $name . '（秒传）');
             traffic_add($userId, 'up', 0, 1);
@@ -152,6 +156,11 @@ function upload_store_chunk(array $session, int $index): array
         throw new RuntimeException('分片序号越界。');
     }
 
+    $chunkSize = (int) $session['chunk_size'];
+    // 声明 size 为 0（或省略）时没有可比的总量，用分片大小兜底，
+    // 免得一个「未知大小」的会话成为无限容量的垃圾桶。
+    $cap = (int) $session['size'] > 0 ? (int) $session['size'] : $chunkSize;
+
     $dir = chunk_dir((string) $session['upload_id']);
     $target = $dir . '/' . $index . '.part';
 
@@ -173,18 +182,34 @@ function upload_store_chunk(array $session, int $index): array
         @unlink($target);
         throw new RuntimeException('分片为空，请重试。');
     }
+    // 单个分片不得超过约定的分片大小。没有这道闸，客户端可以声明一个很小的
+    // size（拿到很少的 total_chunks），却给每个分片塞满整个请求体——分片躺在
+    // runtime/chunks 里、不计入配额，反复如此就能把磁盘写满。
+    if ($chunkSize > 0 && $written > $chunkSize) {
+        @unlink($target);
+        throw new RuntimeException('分片超过约定的分片大小。');
+    }
     @chmod($target, 0600);
 
     // 分片汇总用行锁串行化，避免并发上报时 read-modify-write 互相覆盖丢分片
     $received = [];
     $totalBytes = 0;
-    db_tx(static function () use ($session, $index, $written, &$received, &$totalBytes): void {
+    $tooBig = false;
+    db_tx(static function () use ($session, $index, $written, $cap, &$received, &$totalBytes, &$tooBig): void {
         $row = q_one('SELECT received, total_chunks FROM upload_sessions WHERE id = ? FOR UPDATE', [(int) $session['id']]);
         if ($row === null) {
             return;
         }
         $buf = json_decode((string) $row['received'], true);
         $buf = is_array($buf) ? $buf : [];
+
+        // 已收总量不得超过声明的大小（重传同一分片时扣掉旧值再算）
+        $prospective = array_sum($buf) - (int) ($buf[$index] ?? 0) + $written;
+        if ($prospective > $cap) {
+            $tooBig = true;
+            return;
+        }
+
         $buf[$index] = $written;
         $received = $buf;
         $totalBytes = array_sum($buf);
@@ -195,6 +220,11 @@ function upload_store_chunk(array $session, int $index): array
             'updated_at'     => now(),
         ], 'id = ?', [(int) $session['id']]);
     });
+
+    if ($tooBig) {
+        @unlink($target);
+        throw new RuntimeException('已收分片总量超过声明的大小。');
+    }
 
     return [
         'received' => count($received),
@@ -323,6 +353,10 @@ function upload_complete(): void
     }
 
     $size = (int) filesize($merged);
+
+    // 合并已开始，这些分片马上要折算成节点用量。先把会话标成 merging 让它退出
+    // 「在飞占用」的统计，否则配额会被算两遍（分片一次、节点一次）。
+    q_update('upload_sessions', ['status' => 'merging', 'updated_at' => now()], 'id = ?', [(int) $session['id']]);
 
     // 目标目录（可能来自文件夹上传的相对路径）
     $parentId = (int) $session['parent_id'];

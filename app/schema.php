@@ -10,7 +10,7 @@ if (!defined('BASE_PATH')) {
 /**
  * 数据库结构定义。改结构时把 SCHEMA_VERSION 加一，下次请求会自动补建。
  */
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 16;
 
 /** @return list<string> */
 function schema_statements(): array
@@ -37,6 +37,8 @@ function schema_statements(): array
             private_hash    VARCHAR(255)    NULL,
             totp_secret     VARCHAR(64)     NULL,
             totp_enabled    TINYINT(1)      NOT NULL DEFAULT 0,
+            -- 会话纪元：改密 / 改两步验证时加一，用来把其它已登录的会话踢下线
+            session_epoch   BIGINT UNSIGNED NOT NULL DEFAULT 0,
             created_at      DATETIME        NOT NULL,
             updated_at      DATETIME        NOT NULL,
             last_login_at   DATETIME        NULL,

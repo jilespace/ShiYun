@@ -58,6 +58,8 @@ ini_set('session.use_strict_mode', '0');
 session_id($ownerSid);
 session_start();
 $_SESSION['user_id'] = $uid;
+// 必须连会话纪元一起造，否则 Auth::user() 会把它当成改密前的旧 cookie 直接登出
+$_SESSION['auth_epoch'] = (int) q_val('SELECT session_epoch FROM users WHERE id = ?', [$uid]);
 $_SESSION['csrf_token'] = 'csrf' . bin2hex(random_bytes(6));
 $ownerCsrf = $_SESSION['csrf_token'];
 session_write_close();

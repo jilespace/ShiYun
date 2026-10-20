@@ -13,10 +13,13 @@ foreach ($targets as $file => $label) {
     check(str_contains($src, 'blob_deliver('), "{$label} 应调用 blob_deliver()");
 }
 
-// shares.php 同时含下载与内联预览：下载用 deliver（私密空间回落 stream），内联预览仍用 stream
+// shares.php 同时含下载与内联预览：下载走 deliver，内联预览走 stream。
+// 私密空间是直接 403，不再「回落 stream」——回落等于没挡：只是不发明文直链，
+// 字节照样从本机流出去了。
 $shares = (string) file_get_contents(BASE_PATH . '/app/modules/shares.php');
 check(substr_count($shares, 'blob_deliver(') === 1, 'shares.php 应恰好有 1 处 blob_deliver（下载）');
-check(substr_count($shares, 'blob_stream(') === 2, 'shares.php 应有 2 处 blob_stream（下载私密回落 + 内联预览）');
+check(substr_count($shares, 'blob_stream(') === 1, 'shares.php 应恰好有 1 处 blob_stream（内联预览）');
+check(str_contains($shares, '该内容不可下载'), 'shares.php 的下载路径应直接拒绝私密空间内容');
 
 // 四个下载端点的直链调用必须被私密空间守卫包住
 foreach (['download.php', 'versions.php', 'api.php', 'shares.php'] as $guarded) {

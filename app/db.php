@@ -101,6 +101,12 @@ function db_migrate(PDO $pdo): void
         $pdo->exec('ALTER TABLE users ADD COLUMN totp_enabled TINYINT(1) NOT NULL DEFAULT 0 AFTER totp_secret');
     }
 
+    // users.session_epoch：改密 / 改两步验证时加一，使其它会话失效
+    $userCols2 = array_column($pdo->query('SHOW COLUMNS FROM users')->fetchAll(), 'Field');
+    if (!in_array('session_epoch', $userCols2, true)) {
+        $pdo->exec('ALTER TABLE users ADD COLUMN session_epoch BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER totp_enabled');
+    }
+
     // activities / login_logs 的 created_at 索引：定时清理按时间删，否则每分钟全表扫
     foreach (['activities' => 'idx_act_created', 'login_logs' => 'idx_login_created'] as $tbl => $idxName) {
         $cols = array_column($pdo->query('SHOW INDEX FROM ' . $tbl)->fetchAll(), 'Key_name');

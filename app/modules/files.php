@@ -407,13 +407,14 @@ function files_tree(): void
     $exclude = input_int('exclude');
 
     $rows = q_all(
-        'SELECT id, parent_id, name, is_private FROM nodes
+        'SELECT id, parent_id, name, is_private, path FROM nodes
          WHERE user_id = ? AND kind = ? AND deleted_at IS NULL ORDER BY name_key ASC',
         [$userId, 'folder']
     );
 
     $privateId = user_private_id($userId);
     $trashId = user_trash_id($userId);
+    $trashPrefix = node_trash_prefix($userId);
     $excluded = [];
 
     // 被移动/复制的目录及其整棵子树不能作为目标
@@ -432,6 +433,12 @@ function files_tree(): void
     foreach ($rows as $row) {
         $id = (int) $row['id'];
         if ($id === $trashId || in_array($id, $excluded, true)) {
+            continue;
+        }
+        // 删文件夹时只有顶层节点被打上 deleted_at，子节点仍是 NULL，
+        // 光排除回收站根不够——它们会作为合法目标出现，移进去后路径落在
+        // 回收站前缀下而 deleted_at 为空，条目就此状态错乱。
+        if ($trashPrefix !== '' && str_starts_with((string) $row['path'], $trashPrefix)) {
             continue;
         }
         if ((int) $row['is_private'] === 1 && !Auth::privateUnlocked()) {

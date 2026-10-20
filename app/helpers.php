@@ -18,6 +18,24 @@ function config(string $key, mixed $default = null): mixed
     return $GLOBALS['config'][$key] ?? $default;
 }
 
+/**
+ * 异常信息是否可以安全地回显给客户端。
+ *
+ * 业务异常（应用自己抛的 RuntimeException / InvalidArgumentException）的文案是写给
+ * 用户看的，可以原样返回；但 PDOException 也继承 RuntimeException，它的 message 里
+ * 带着 SQL 与表结构，绝不能外泄——这类一律换成兜底文案，真正的错误进 error_log。
+ */
+function safe_error_message(Throwable $e, string $fallback = '服务器内部错误'): string
+{
+    if ($e instanceof PDOException) {
+        return $fallback;
+    }
+    if ($e instanceof RuntimeException || $e instanceof InvalidArgumentException) {
+        return $e->getMessage();
+    }
+    return $fallback;
+}
+
 /** 拼接内部路由 URL */
 function url(string $route = '', array $params = []): string
 {

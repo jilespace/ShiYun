@@ -101,12 +101,16 @@ set_exception_handler(static function (Throwable $e): void {
         return;
     }
 
-    $isDomain = $e instanceof RuntimeException || $e instanceof InvalidArgumentException;
+    // safe_error_message() 会把 PDOException 挡在外面——它也继承 RuntimeException，
+    // 但 message 里带着 SQL，直接回显等于把表结构送给对方。
+    $isDomain = ($e instanceof RuntimeException || $e instanceof InvalidArgumentException)
+        && !$e instanceof PDOException;
+    $message = safe_error_message($e, '请稍后重试，或联系管理员查看日志。');
 
     if (wants_json()) {
         json_out([
             'ok'    => false,
-            'error' => $isDomain ? $e->getMessage() : '服务器内部错误',
+            'error' => $isDomain ? $message : '服务器内部错误',
             'code'  => $isDomain ? 'rejected' : 'internal',
         ], $isDomain ? 400 : 500);
     }
@@ -116,8 +120,7 @@ set_exception_handler(static function (Throwable $e): void {
     echo '<!doctype html><meta charset="utf-8"><title>出错了</title>';
     echo '<body style="background:#08090b;color:#f4f2ec;font:16px/1.6 system-ui;padding:12vh 8vw">';
     echo '<h1 style="font-size:1.6rem;letter-spacing:-.02em">' . ($isDomain ? '请求未被接受' : '服务器内部错误') . '</h1>';
-    echo '<p style="color:rgba(244,242,236,.6)">'
-        . e($isDomain ? $e->getMessage() : '请稍后重试，或联系管理员查看日志。') . '</p>';
+    echo '<p style="color:rgba(244,242,236,.6)">' . e($message) . '</p>';
     echo '<p><a href="' . e(url('')) . '" style="color:#8a88ff">返回首页</a></p>';
     exit;
 });

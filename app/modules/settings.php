@@ -112,11 +112,13 @@ function settings_change_password(): void
         }
     }
 
+    $email = (string) Auth::user()['email'];
     change_password($userId, (string) input('password'));
+    // 先把其它设备上的会话踢掉，再重开当前会话；顺序反了会把当前会话也踢下线
+    revoke_other_sessions($userId);
     activity_log($userId, 'password.change');
-    log_login($userId, (string) Auth::user()['email'], 'success', '修改密码');
+    log_login($userId, $email, 'success', '修改密码');
 
-    // 改密后重开会话，其他设备上的旧会话仍持有旧 cookie，但密码已失效
     Auth::login($userId);
 
     json_ok(['changed' => true]);

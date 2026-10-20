@@ -44,15 +44,16 @@ function blob_acquire(string $hash, int $size, ?string $mime = null): int
         return (int) $existing['id'];
     }
 
-    return (int) db_tx(static function () use ($hash, $size, $mime): int {
-        return q_insert('blobs', [
-            'hash'       => $hash,
-            'size'       => $size,
-            'mime'       => $mime,
-            'ref_count'  => 1,
-            'created_at' => now(),
-        ]);
-    });
+    // 并发上传同一份新内容时两个请求都会走到这里。把「插入或自增」并成一条语句，
+    // 否则后到的那个会撞上 uk_blob_hash 抛异常，整个上传以 500 收场。
+    q_exec(
+        'INSERT INTO blobs (hash, size, mime, ref_count, created_at)
+         VALUES (?, ?, ?, 1, ?)
+         ON DUPLICATE KEY UPDATE ref_count = ref_count + 1',
+        [$hash, $size, $mime, now()]
+    );
+
+    return (int) q_val('SELECT id FROM blobs WHERE hash = ?', [$hash]);
 }
 
 /** 释放一次引用；归零时删除本地文件，并把远程副本的清理入队 */
@@ -148,12 +149,17 @@ function blob_ingest_file(string $tmpPath, ?string $knownHash = null, ?string $m
     }
 
     $size = (int) filesize($tmpPath);
-    $hash = $knownHash !== null && preg_match('/^[0-9a-f]{64}$/', $knownHash) === 1
-        ? $knownHash
-        : hash_file('sha256', $tmpPath);
 
+    // 指纹一律按内容算，绝不相信客户端声明的值。
+    // 否则可以先把任意字节写进 blob_path(H)，等别人上传真正哈希为 H 的文件时
+    // 命中去重分支，拿到的是攻击者的内容——内容寻址的完整性就没了。
+    $hash = hash_file('sha256', $tmpPath);
     if ($hash === false) {
         throw new RuntimeException('计算文件指纹失败');
+    }
+    if ($knownHash !== null && preg_match('/^[0-9a-f]{64}$/', $knownHash) === 1
+        && !hash_equals($knownHash, $hash)) {
+        throw new RuntimeException('文件内容与声明的指纹不符');
     }
 
     // 内容已存在：秒传，丢弃临时文件

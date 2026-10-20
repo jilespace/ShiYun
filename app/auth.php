@@ -35,8 +35,20 @@ final class Auth
             self::logout();
             return null;
         }
+        // 会话纪元对不上说明密码 / 两步验证已被改过，这个 cookie 是旧的。
+        // 不比对的话，cookie 被盗后受害者改密码也踢不掉攻击者。
+        if ((int) ($_SESSION['auth_epoch'] ?? -1) !== (int) ($user['session_epoch'] ?? 0)) {
+            self::logout();
+            return null;
+        }
         self::$cache = $user;
         return $user;
+    }
+
+    /** 丢弃本次请求内缓存的用户行（改了 users 表之后必须调用） */
+    public static function refresh(): void
+    {
+        self::$cache = null;
     }
 
     /** 建立登录态：重生成会话 ID，防止会话固定 */
@@ -44,7 +56,7 @@ final class Auth
     {
         session_regenerate_id(true);
         $_SESSION['user_id'] = $userId;
-        $_SESSION['auth_epoch'] = time();
+        $_SESSION['auth_epoch'] = (int) q_val('SELECT session_epoch FROM users WHERE id = ?', [$userId]);
         unset($_SESSION['csrf_token']);
         self::$cache = null;
     }
@@ -119,20 +131,27 @@ function log_login(?int $userId, string $email, string $status, ?string $reason 
     ]);
 }
 
-/** 是否因连续失败被临时锁定 */
+/**
+ * 是否因连续失败被临时锁定。
+ *
+ * 按「邮箱 + 来源 IP」成对计数，而不是只按邮箱：只按邮箱的话，任何人拿一个已知
+ * 邮箱连发几次错误密码就能把真正的用户锁在门外（定向拒绝服务）。成对计数后，
+ * 攻击者换 IP 也波及不到受害者本人，而同一个 IP 的猛攻照样被挡住。
+ */
 function login_locked(string $email, string $ip): bool
 {
     $since = date('Y-m-d H:i:s', time() - (int) config('lockout_seconds'));
     $max = (int) config('max_login_attempts');
 
-    $byEmail = (int) q_val(
-        'SELECT COUNT(*) FROM login_logs WHERE status = ? AND created_at > ? AND email = ?',
-        ['fail', $since, $email]
+    $byPair = (int) q_val(
+        'SELECT COUNT(*) FROM login_logs WHERE status = ? AND created_at > ? AND email = ? AND ip = ?',
+        ['fail', $since, $email, $ip]
     );
-    if ($byEmail >= $max) {
+    if ($byPair >= $max) {
         return true;
     }
 
+    // 同一个 IP 横扫多个账号同样要拦（撞库）：阈值放宽，但 IP 维度单独兜一层
     $byIp = (int) q_val(
         'SELECT COUNT(*) FROM login_logs WHERE status = ? AND created_at > ? AND ip = ?',
         ['fail', $since, $ip]

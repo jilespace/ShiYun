@@ -431,7 +431,15 @@ function archive_import_tree(int $userId, int $parentId, string $dir): array
             continue;
         }
 
-        $node = node_create_file($userId, $parentId, $name, $blob, $mime);
+        try {
+            $node = node_create_file($userId, $parentId, $name, $blob, $mime);
+        } catch (RuntimeException $e) {
+            // 配额在 node_create_file 里是原子把关的，并发下可能刚好抢不到。
+            // 单个文件放不下不该让整包解压崩掉，跳过它继续——同时撤销这次入库。
+            blob_release((int) $blob['blob_id']);
+            $created['skipped']++;
+            continue;
+        }
         $created['created']++;
         $created['bytes'] += (int) $node['size'];
 

@@ -224,6 +224,8 @@ function security_twofactor_action(): void
             $fail('验证码不正确，请确认认证器时间与手机时间一致后重试。');
         }
         q_update('users', ['totp_enabled' => 1], 'id = ?', [$userId]);
+        // 第二因子的状态变了，其它设备上的旧会话不能继续免验证使用
+        revoke_other_sessions($userId);
         // 开启的同时发一组一次性恢复码，避免认证器丢失后彻底进不来
         $_SESSION['totp_recovery_show'] = totp_recovery_generate($userId);
         activity_log($userId, 'totp.enable');
@@ -255,6 +257,7 @@ function security_twofactor_action(): void
         }
         q_update('users', ['totp_secret' => null, 'totp_enabled' => 0], 'id = ?', [$userId]);
         totp_recovery_clear($userId);
+        revoke_other_sessions($userId);
         activity_log($userId, 'totp.disable');
         redirect(url('security.twofactor'));
     }

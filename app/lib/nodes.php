@@ -401,26 +401,36 @@ function node_create_file(int $userId, int $parentId, string $name, array $blob,
     $mime ??= mime_of($name);
     $ext ??= ext_of($name);
 
-    $id = q_insert('nodes', [
-        'user_id'    => $userId,
-        'parent_id'  => $parentId,
-        'name'       => $name,
-        'name_key'   => mb_strtolower($name),
-        'kind'       => 'file',
-        'size'       => (int) $blob['size'],
-        'mime'       => $mime,
-        'ext'        => $ext,
-        'blob_id'    => (int) $blob['blob_id'],
-        'path'       => (string) $parent['path'] . '0/',   // 下面重算
-        'depth'      => (int) $parent['depth'] + 1,
-        'is_private' => node_in_private($userId, $parent) ? 1 : 0,
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
+    // 配额在这里原子地把关。assert_quota() 是先看后写，两个并发上传能双双通过；
+    // 这条带条件的 UPDATE 抢不到就直接抛，调用方的错误分支负责收尾。
+    if (!quota_claim($userId, (int) $blob['size'])) {
+        throw new RuntimeException('存储空间不足，请清理文件或扩容。');
+    }
 
-    q_update('nodes', ['path' => (string) $parent['path'] . $id . '/'], 'id = ?', [$id]);
-    node_refresh_child_count($userId, $parentId);
-    user_add_usage($userId, (int) $blob['size']);
+    try {
+        $id = q_insert('nodes', [
+            'user_id'    => $userId,
+            'parent_id'  => $parentId,
+            'name'       => $name,
+            'name_key'   => mb_strtolower($name),
+            'kind'       => 'file',
+            'size'       => (int) $blob['size'],
+            'mime'       => $mime,
+            'ext'        => $ext,
+            'blob_id'    => (int) $blob['blob_id'],
+            'path'       => (string) $parent['path'] . '0/',   // 下面重算
+            'depth'      => (int) $parent['depth'] + 1,
+            'is_private' => node_in_private($userId, $parent) ? 1 : 0,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        q_update('nodes', ['path' => (string) $parent['path'] . $id . '/'], 'id = ?', [$id]);
+        node_refresh_child_count($userId, $parentId);
+    } catch (Throwable $e) {
+        user_add_usage($userId, -(int) $blob['size']);   // 撤销刚才的预留
+        throw $e;
+    }
 
     return node_require($userId, $id);
 }
@@ -520,11 +530,18 @@ function node_move(int $userId, array $node, int $targetParentId): array
             'updated_at' => now(),
         ], 'id = ? AND user_id = ?', [(int) $node['id'], $userId]);
 
-        // 整棵子树重算路径
+        // 整棵子树重算路径，并同步 is_private。
+        // 搜索/相册/统计是按 is_private 这一列过滤的（不是按路径判定），
+        // 只改被移动节点自身的话，移入私密空间的文件夹其子项仍会出现在
+        // 搜索与相册里——那是隐私泄漏；反向移出则会让正常文件永久消失。
         q_exec(
-            'UPDATE nodes SET path = CONCAT(?, SUBSTRING(path, ?)), depth = depth + ?
+            'UPDATE nodes SET path = CONCAT(?, SUBSTRING(path, ?)), depth = depth + ?, is_private = ?
              WHERE user_id = ? AND (id = ? OR path LIKE ?)',
-            [$newPath, strlen($oldPath) + 1, $depthDelta, $userId, (int) $node['id'], $oldPath . '%']
+            [
+                $newPath, strlen($oldPath) + 1, $depthDelta,
+                node_in_private($userId, $target) ? 1 : 0,
+                $userId, (int) $node['id'], $oldPath . '%',
+            ]
         );
     });
 
@@ -723,10 +740,16 @@ function node_restore(int $userId, array $node): array
             'updated_at'   => now(),
         ], 'id = ? AND user_id = ?', [(int) $node['id'], $userId]);
 
+        // 同 node_move：子树必须一起改 is_private，否则从回收站还原回私密空间
+        // （或从私密空间还原到根）时，子项的标记与所在位置不符。
         q_exec(
-            'UPDATE nodes SET path = CONCAT(?, SUBSTRING(path, ?)), depth = depth + ?
+            'UPDATE nodes SET path = CONCAT(?, SUBSTRING(path, ?)), depth = depth + ?, is_private = ?
              WHERE user_id = ? AND (id = ? OR path LIKE ?)',
-            [$newPath, strlen($oldPath) + 1, $depthDelta, $userId, (int) $node['id'], $oldPath . '%']
+            [
+                $newPath, strlen($oldPath) + 1, $depthDelta,
+                node_in_private($userId, $parent) ? 1 : 0,
+                $userId, (int) $node['id'], $oldPath . '%',
+            ]
         );
     });
 
@@ -739,11 +762,20 @@ function node_restore(int $userId, array $node): array
 function node_purge(int $userId, array $node): void
 {
     db_tx(static function () use ($userId, $node): void {
+        // 必须 FOR UPDATE：并发的第二次 purge（连点两次「彻底删除」，或清空回收站
+        // 撞上 cron 的 trash_purge_expired）会阻塞到第一次提交，之后它的锁定读看到
+        // 行已被删、拿到空集直接退出。否则两次 purge 各释放一次引用，去重共享的
+        // blob 会被第二次调用当成「归零」删掉物理文件，而它仍被别的节点引用着。
         $rows = q_all(
             'SELECT id, kind, blob_id, size FROM nodes
-             WHERE user_id = ? AND (id = ? OR path LIKE ?)',
+             WHERE user_id = ? AND (id = ? OR path LIKE ?) FOR UPDATE',
             [$userId, (int) $node['id'], (string) $node['path'] . '%']
         );
+
+        // 已被并发删除：空数组会让下面的 IN () 变成语法错误，直接返回
+        if ($rows === []) {
+            return;
+        }
 
         $freedBytes = 0;
         foreach ($rows as $row) {

@@ -163,6 +163,21 @@ function tasks_create(): void
         $title = '磁力任务 ' . mb_substr($url, 0, 60);
     }
 
+    // 离线下载是服务器主动发起请求，必须挡住内网 / 本机 / 云元数据地址——
+    // 否则「填个 URL」就等于把服务器当成内网探针。主机名和解析结果都要查：
+    // 光看主机名挡不住「域名解析到 127.0.0.1」。
+    $fetchHost = (string) (parse_url($url, PHP_URL_HOST) ?: '');
+    if ($fetchHost !== '') {
+        if (host_is_private($fetchHost)) {
+            json_fail('出于安全考虑，不允许下载内网 / 本机地址。');
+        }
+        foreach (host_resolve_ips($fetchHost) as $ip) {
+            if (ip_is_private($ip)) {
+                json_fail('该地址解析到内网 / 本机，已拒绝。');
+            }
+        }
+    }
+
     $id = q_insert('transfer_tasks', [
         'user_id'    => $userId,
         'kind'       => $kind,
@@ -413,11 +428,45 @@ function tasks_sweep_trash(int $perUser = 100): int
 
 /* ============================================================ 任务推进器 */
 
+/** 任务停在 running 多久算卡死 */
+const TASK_STUCK_MINUTES = 30;
+
+/**
+ * 回收卡死的任务：超过 TASK_STUCK_MINUTES 仍停在 running 的，重新排队；
+ * 已经反复卡死的直接判失败，免得在队列里空转。
+ */
+function tasks_reap_stuck(int $userId): void
+{
+    $cutoff = date('Y-m-d H:i:s', time() - TASK_STUCK_MINUTES * 60);
+
+    q_exec(
+        "UPDATE transfer_tasks
+         SET status = 'failed', error = '任务反复中断，已放弃', finished_at = ?
+         WHERE user_id = ? AND status = 'running' AND started_at IS NOT NULL
+           AND started_at < ? AND retries >= 3",
+        [now(), $userId, $cutoff]
+    );
+
+    // started_at 一并清空：抢占时用的是 COALESCE(started_at, ?)，
+    // 留着旧值会让重排后的任务立刻又被判成卡死。
+    q_exec(
+        "UPDATE transfer_tasks
+         SET status = 'queued', started_at = NULL, retries = retries + 1,
+             error = '上一次执行中断，已重新排队'
+         WHERE user_id = ? AND status = 'running' AND started_at IS NOT NULL AND started_at < ?",
+        [$userId, $cutoff]
+    );
+}
+
 /**
  * 推进队列。返回本次处理的任务数。
  */
 function tasks_tick(int $userId, int $budgetSeconds = TASK_TICK_SECONDS): int
 {
+    // 先把卡死的任务捞回来：worker 中途崩溃（OOM、被 kill）会让任务永远停在
+    // running，而下面只挑 queued，不重置的话它就再也不会被拾取。
+    tasks_reap_stuck($userId);
+
     $deadline = microtime(true) + $budgetSeconds;
     $queued = q_all(
         "SELECT * FROM transfer_tasks WHERE user_id = ? AND status = 'queued'
@@ -492,11 +541,26 @@ function task_run_offline(array $task, float $deadline): void
     $lastWrite = microtime(true);
     $speedBytes = 0;
     $speedAt = microtime(true);
+    $blocked = false;
 
     $ch = curl_init($url);
     $options = [
         CURLOPT_FILE           => $fh,
         CURLOPT_FOLLOWLOCATION => true,
+        // 只允许这几种协议。默认值还包含 dict/gopher/file 等，file:// 能读本机文件。
+        CURLOPT_PROTOCOLS        => CURLPROTO_HTTP | CURLPROTO_HTTPS | CURLPROTO_FTP,
+        CURLOPT_REDIR_PROTOCOLS  => CURLPROTO_HTTP | CURLPROTO_HTTPS | CURLPROTO_FTP,
+        // 入队时挡的是最初的主机名，重定向的落点必须再挡一次
+        CURLOPT_HEADERFUNCTION   => static function ($ch, string $line) use (&$blocked): int {
+            if (preg_match('#^location:\s*(\S+)#i', trim($line), $m) === 1) {
+                $h = (string) (parse_url($m[1], PHP_URL_HOST) ?: '');
+                if ($h !== '' && host_is_private($h)) {
+                    $blocked = true;
+                    return 0;   // 返回 0 中断传输
+                }
+            }
+            return strlen($line);
+        },
         CURLOPT_MAXREDIRS      => 8,
         CURLOPT_CONNECTTIMEOUT => 15,
         CURLOPT_TIMEOUT        => 0,
@@ -542,6 +606,13 @@ function task_run_offline(array $task, float $deadline): void
     $error = curl_error($ch);
     curl_close($ch);
     fclose($fh);
+
+    // 重定向跳到了内网：直接判失败，不要按普通网络错误重试三次
+    if ($blocked) {
+        @unlink($tmp);
+        task_fail($task, '重定向指向内网 / 本机地址，已拒绝。');
+        return;
+    }
 
     // 预算耗尽：保留断点，下次继续
     if (microtime(true) >= $deadline && $ok === false) {
@@ -740,15 +811,17 @@ function task_run_purge(array $task): void
             'status' => 'done', 'progress' => 100, 'error' => null, 'finished_at' => now(),
         ], 'id = ?', [(int) $task['id']]);
     } catch (Throwable $e) {
+        error_log('清理远程副本失败：' . $e->getMessage());
+        $reason = safe_error_message($e, '远程删除失败');
         $retries = (int) $task['retries'] + 1;
         if ($retries <= 3) {
             q_update('transfer_tasks', [
                 'status' => 'queued', 'retries' => $retries,
-                'error' => '第 ' . $retries . ' 次重试：' . $e->getMessage(),
+                'error' => '第 ' . $retries . ' 次重试：' . $reason,
             ], 'id = ?', [(int) $task['id']]);
             return;
         }
-        task_fail($task, $e->getMessage());
+        task_fail($task, $reason);
     }
 }
 
@@ -782,19 +855,24 @@ function task_cleanup_temp(array $task): void
 function task_folder_options(int $userId): array
 {
     $rows = q_all(
-        'SELECT id, parent_id, name, is_private FROM nodes
+        'SELECT id, parent_id, name, is_private, path FROM nodes
          WHERE user_id = ? AND kind = ? AND deleted_at IS NULL ORDER BY name_key ASC',
         [$userId, 'folder']
     );
 
     $privateId = user_private_id($userId);
     $trashId = user_trash_id($userId);
+    $trashPrefix = node_trash_prefix($userId);
     $rootId = user_root_id($userId);
 
     $out = [];
     foreach ($rows as $row) {
         $id = (int) $row['id'];
         if ($id === $trashId) {
+            continue;
+        }
+        // 回收站里被删文件夹的子目录 deleted_at 仍是 NULL，靠路径前缀排除（同 files_tree）
+        if ($trashPrefix !== '' && str_starts_with((string) $row['path'], $trashPrefix)) {
             continue;
         }
         if ((int) $row['is_private'] === 1 && !Auth::privateUnlocked()) {

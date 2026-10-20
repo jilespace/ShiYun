@@ -1177,20 +1177,23 @@
                 + '<button class="minibtn" type="button" data-vdelete="' + v.id + '" aria-label="删除此版本">' + icon('trash-2') + '</button>'
                 + '</div></td></tr>').join('');
 
+            // 事件挂在内层容器上，不能挂在 modalBody 上：它是常驻节点，
+            // closeModal() 只清 innerHTML、不移除监听器，每次打开都会再叠一层，
+            // 结果点一次「恢复」发出多次请求。内层容器每次都是新的，随之销毁。
             openModal('版本历史 · ' + data.node.name,
-                '<div class="tblwrap"><table class="tbl"><thead><tr>'
+                '<div data-versions><div class="tblwrap"><table class="tbl"><thead><tr>'
                 + '<th>版本</th><th class="num">大小</th><th>时间</th><th></th></tr></thead><tbody>'
                 + '<tr><td class="nowrap"><b>当前</b></td><td class="num">' + escapeHtml(data.current.sizeText) + '</td>'
                 + '<td class="muted nowrap">' + escapeHtml(data.current.when) + '</td><td></td></tr>'
                 + (rows || '<tr><td colspan="4" class="muted">还没有历史版本。同名覆盖上传时会自动留档。</td></tr>')
                 + '</tbody></table></div>'
                 + '<p class="mhint" style="margin-top:14px">历史版本占用 ' + escapeHtml(data.usageText) + '，'
-                + '同名文件重新上传时会自动保留最近 10 个版本。</p>',
+                + '同名文件重新上传时会自动保留最近 10 个版本。</p></div>',
                 '<button class="mbtn mbtn--primary" type="button" data-x="ok">关闭</button>');
 
             modalFoot.querySelector('[data-x="ok"]').addEventListener('click', closeModal);
 
-            modalBody.addEventListener('click', async (e) => {
+            modalBody.querySelector('[data-versions]').addEventListener('click', async (e) => {
                 const restore = e.target.closest('[data-vrestore]');
                 if (restore) {
                     try {

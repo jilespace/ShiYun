@@ -197,9 +197,10 @@ function preview_save(): void
 
     try {
         $blob = blob_ingest_file($tmp, null, (string) ($node['mime'] ?? 'text/plain'));
-    } catch (RuntimeException $e) {
+    } catch (Throwable $e) {
         @unlink($tmp);
-        json_fail('保存失败：' . $e->getMessage(), 500, 'io');
+        error_log('预览编辑保存失败：' . $e->getMessage());
+        json_fail('保存失败：' . safe_error_message($e, '请稍后重试。'), 500, 'io');
     }
 
     $updated = node_replace_content($userId, $node, $blob);
