@@ -240,6 +240,10 @@ function blob_push_to_source(int $blobId, int $sourceId): array
  */
 function blob_direct_url(int $userId, int $blobId, string $mime, string $filename, string $disposition = 'attachment'): ?string
 {
+    // 与 blob_stream() 的守卫同源：内联只对白名单类型生效。
+    // 少了这一行，302 路径会把 text/html 之类当成 inline 发出去。
+    $disposition = mime_inline_ok($mime) ? $disposition : 'attachment';
+
     $loc = blob_location_direct($userId, $blobId);
     if ($loc === null) {
         return null;

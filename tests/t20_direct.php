@@ -82,4 +82,15 @@ check($refD->getParameters()[5]->getName() === 'disposition',
 check($refD->getParameters()[5]->getDefaultValue() === 'attachment',
     'blob_deliver 的 disposition 默认值应为 attachment');
 
+// 签名存在 ≠ 参数被使用：把实现那两行也钉住
+check(strpos($storage, "\$disposition . '; filename") !== false,
+    'blob_direct_url 应把 disposition 用在 presign 的 response-content-disposition 上');
+check(str_contains($storage, '$disposition === \'inline\''),
+    'blob_deliver 的本地回退应由 disposition 推导 inline');
+
+// 302 路径必须与 blob_stream() 共用同一份内联白名单：否则 text/html 会被
+// 当作 inline 从本域发出，正是本功能要防的存储型 XSS。
+check(str_contains($storage, 'mime_inline_ok($mime) ? $disposition : '),
+    'blob_direct_url 应对非白名单类型强制降级为 attachment');
+
 finish();
