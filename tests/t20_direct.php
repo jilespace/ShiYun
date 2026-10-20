@@ -384,4 +384,23 @@ $js = (string) file_get_contents(BASE_PATH . '/assets/js/files.js');
 check(str_contains($js, 'directCount'), 'files.js 应读取 directCount');
 check(str_contains($js, "icon('zap'"), 'files.js 应用 zap 图标做直链角标');
 
+// --------------------------------------------------------- 分享页直链标签
+
+$sharesMod = (string) file_get_contents(BASE_PATH . '/app/modules/shares.php');
+check(str_contains($sharesMod, 'direct_links'), 'shares_list 应查 direct_links');
+check(str_contains($sharesMod, "'directs'"), 'shares_list 应传 directs');
+check(str_contains($sharesMod, "'tab'"), 'shares_list 应传 tab');
+
+$sharesView = (string) file_get_contents(BASE_PATH . '/app/views/shares.php');
+check(str_contains($sharesView, 'seg2'), '视图应用 .seg2 分段控件');
+check(str_contains($sharesView, 'direct.revoke'), '视图应能作废直链');
+check(str_contains($sharesView, 'urlDownload'), '视图应提供下载直链（&dl=1）');
+check(str_contains($sharesView, 'data-api="direct.revoke"'),
+    '作废应走声明式 data-api，不自己写 JS');
+// 必须说明来源 IP 在反代下不可靠
+check(str_contains($sharesView, '反向代理'), '视图应说明来源 IP 在反代 / 穿透下的限制');
+
+$consoleJs = (string) file_get_contents(BASE_PATH . '/assets/js/console.js');
+check(str_contains($consoleJs, 'data-direct-copy'), 'console.js 应处理直链复制');
+
 finish();

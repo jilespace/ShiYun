@@ -10,6 +10,8 @@ if (!defined('BASE_PATH')) {
 /** @var array $user */
 /** @var list<array> $items */
 /** @var array{used:int,total:int} $quota */
+/** @var list<array> $directs */
+/** @var string $tab */
 
 $active = count(array_filter($items, static fn (array $s): bool => $s['status'] === 'active'));
 $totalViews = array_sum(array_map(static fn (array $s): int => (int) $s['views'], $items));
@@ -38,6 +40,14 @@ $permLabel = static fn (string $p): string => match ($p) {
                 </div>
             </div>
 
+            <div class="seg2" style="margin-bottom:18px">
+                <a href="<?= e(url('shares.list')) ?>"
+                   class="<?= $tab === 'shares' ? 'is-on' : '' ?>">分享链接</a>
+                <a href="<?= e(url('shares.list', ['tab' => 'direct'])) ?>"
+                   class="<?= $tab === 'direct' ? 'is-on' : '' ?>">直链</a>
+            </div>
+
+            <?php if ($tab === 'shares'): ?>
             <div class="grid grid--4" style="margin-bottom:22px">
                 <div class="tile">
                     <span class="tile__label">生效中</span>
@@ -135,6 +145,109 @@ $permLabel = static fn (string $p): string => match ($p) {
                     </div>
                 <?php endif; ?>
             </div>
+            <?php endif; ?>
+
+            <?php if ($tab === 'direct'): ?>
+            <?php
+            $dActive = count(array_filter($directs, static fn (array $d): bool => $d['active']));
+            $dHits = array_sum(array_map(static fn (array $d): int => (int) $d['hits'], $directs));
+            $dBound = count(array_filter($directs, static fn (array $d): bool => $d['ipAllow'] !== ''));
+            ?>
+            <div class="grid grid--4" style="margin-bottom:22px">
+                <div class="tile">
+                    <span class="tile__label">生效中</span>
+                    <span class="tile__value"><?= $dActive ?><small>条</small></span>
+                </div>
+                <div class="tile">
+                    <span class="tile__label">累计命中</span>
+                    <span class="tile__value"><?= $dHits ?></span>
+                </div>
+                <div class="tile">
+                    <span class="tile__label">带来源限制</span>
+                    <span class="tile__value"><?= $dBound ?></span>
+                </div>
+                <div class="tile tile--signal">
+                    <span class="tile__label">历史总数</span>
+                    <span class="tile__value"><?= count($directs) ?></span>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel__head">
+                    <h2 class="panel__title">直链</h2>
+                    <span class="panel__note">免登录、无落地页</span>
+                </div>
+
+                <?php if ($directs === []): ?>
+                    <div class="panel__body">
+                        <div class="blank">
+                            <?= lucide('plug', 'blank__ico') ?>
+                            <p class="blank__title">还没有直链</p>
+                            <p class="blank__hint">到文件列表里右键一个文件，选「直链」就能生成。</p>
+                        </div>
+                    </div>
+                <?php else: ?>
+                    <p class="hint" style="margin:0 0 14px">
+                        填了来源限制的直链，在反向代理或内网穿透后面拿不到访客真实地址，会一律拒绝——那种环境请留空。
+                    </p>
+                    <div class="tblwrap">
+                        <table class="tbl">
+                            <thead>
+                                <tr>
+                                    <th>文件</th><th>直链</th><th>来源限制</th><th>有效期</th>
+                                    <th class="num">命中</th><th>最近访问</th><th>状态</th><th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($directs as $d): ?>
+                                    <tr>
+                                        <td>
+                                            <div class="tbl__name">
+                                                <?= lucide((string) ($d['node']['icon'] ?? 'file')) ?>
+                                                <span><?= e((string) ($d['node']['name'] ?? '—')) ?></span>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div class="tbl__name tbl__link">
+                                                <code class="tbl__url" title="<?= e((string) $d['url']) ?>"><?= e((string) $d['url']) ?></code>
+                                                <button class="minibtn" type="button"
+                                                        data-direct-copy="<?= e((string) $d['url']) ?>"
+                                                        aria-label="复制直链"><?= lucide('copy') ?></button>
+                                                <button class="minibtn" type="button"
+                                                        data-direct-copy="<?= e((string) $d['urlDownload']) ?>"
+                                                        aria-label="复制下载直链" title="下载直链（&amp;dl=1）"><?= lucide('download') ?></button>
+                                            </div>
+                                        </td>
+                                        <td class="muted nowrap"><?= $d['ipAllow'] !== '' ? e((string) $d['ipAllow']) : '不限' ?></td>
+                                        <td class="muted nowrap"><?= e((string) $d['expiresText']) ?></td>
+                                        <td class="num"><?= (int) $d['hits'] ?></td>
+                                        <td class="muted nowrap"><?= e((string) $d['lastAccess']) ?></td>
+                                        <td>
+                                            <span class="pill<?= $d['active'] ? '' : ' pill--muted' ?>">
+                                                <span class="pill__dot" style="--pill:<?= $d['active'] ? '#4ad07a' : 'rgba(244,242,236,.32)' ?>"></span>
+                                                <?= $d['active'] ? '生效中' : '已失效' ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="tbl__acts">
+                                                <?php if ($d['active']): ?>
+                                                    <button class="chipbtn chipbtn--danger" type="button"
+                                                            data-api="direct.revoke"
+                                                            data-payload="<?= e(json_encode(['ids' => [(int) $d['id']]])) ?>"
+                                                            data-confirm="作废后这条直链立即失效，且不可恢复。"
+                                                            data-title="作废直链" data-label="作废" data-danger="1"
+                                                            data-after="reload">作废</button>
+                                                <?php endif; ?>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
+            </div>
+            <?php endif; ?>
         </div>
     </main>
 </div>

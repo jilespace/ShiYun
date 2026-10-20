@@ -48,6 +48,40 @@ function shares_list(): void
         $items[] = $share;
     }
 
+    $directRows = q_all(
+        'SELECT d.*, n.name AS node_name, n.kind AS node_kind, n.size AS node_size,
+                n.ext AS node_ext, n.mime AS node_mime
+         FROM direct_links d JOIN nodes n ON n.id = d.node_id
+         WHERE d.user_id = ?
+         ORDER BY d.id DESC LIMIT 300',
+        [$userId]
+    );
+
+    $directs = [];
+    foreach ($directRows as $row) {
+        $link = direct_public($row);
+        $link['node'] = node_public([
+            'id' => (int) $row['node_id'],
+            'name' => (string) $row['node_name'],
+            'kind' => (string) $row['node_kind'],
+            'size' => (int) $row['node_size'],
+            'ext' => $row['node_ext'],
+            'mime' => $row['node_mime'],
+            'parent_id' => null,
+            'is_favorite' => 0,
+            'is_hidden' => 0,
+            'is_locked' => 0,
+            'is_private' => 0,
+            'color' => null,
+            'note' => null,
+            'child_count' => 0,
+            'updated_at' => (string) $row['created_at'],
+            'created_at' => (string) $row['created_at'],
+            'deleted_at' => null,
+        ]);
+        $directs[] = $link;
+    }
+
     render('shares', [
         'title'     => '分享 · 拾云',
         'bodyClass' => 'is-app',
@@ -58,6 +92,8 @@ function shares_list(): void
         'quota'     => ['used' => (int) $user['used_bytes'], 'total' => (int) $user['quota_bytes']],
         'page'      => 'shares',
         'items'     => $items,
+        'directs'   => $directs,
+        'tab'       => ($_GET['tab'] ?? '') === 'direct' ? 'direct' : 'shares',
     ]);
 }
 

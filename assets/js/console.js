@@ -244,6 +244,17 @@
                     toast('复制失败，请手动选中链接', 'err');
                 }
             }
+
+            const dirCopy = e.target.closest('[data-direct-copy]');
+            if (dirCopy) {
+                try {
+                    await navigator.clipboard.writeText(dirCopy.dataset.directCopy);
+                    toast('直链已复制');
+                } catch (err) {
+                    toast('复制失败，请手动选中链接', 'err');
+                }
+                return;
+            }
         });
     }
 
