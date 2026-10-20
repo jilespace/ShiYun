@@ -522,7 +522,7 @@ Expected: 两个都全部通过
 
 ```bash
 git add app/schema.php tests/t20_direct.php
-git commit -m "feat: direct_links 表（SCHEMA_VERSION 7）"
+git commit -m "feat: direct_links 表（SCHEMA_VERSION 11）"
 ```
 
 ---
