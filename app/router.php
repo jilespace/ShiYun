@@ -14,7 +14,9 @@ if (!defined('BASE_PATH')) {
  * 未登录可访问的路由列在 PUBLIC_ROUTES 中，其余一律要求登录。
  */
 const PUBLIC_ROUTES = [
+    'home.index',
     'auth.login',
+    'auth.totp',
     'auth.register',
     'auth.forgot',
     'auth.reset',
@@ -66,7 +68,8 @@ function route_dispatch(): void
     [$module, $action] = route_parse();
 
     if ($module === '') {
-        redirect(url(Auth::check() ? 'files.list' : 'auth.login'));
+        // 默认入口：官网首页；已登录用户直接进网盘
+        redirect(url(Auth::check() ? 'files.list' : 'home.index'));
     }
 
     $name = $module . '.' . $action;

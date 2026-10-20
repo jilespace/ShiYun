@@ -76,7 +76,106 @@ function auth_logout(): void
         activity_log($userId, 'logout');
     }
     Auth::logout();
-    redirect(url('auth.login'));
+    redirect(url('home.index'));
+}
+
+/* --------------------------------------------------------------- 两步验证 */
+
+/** 该用户是否启用了 TOTP（启用标记 + 密钥都在才算） */
+function auth_totp_required(int $userId): bool
+{
+    $row = q_one('SELECT totp_secret, totp_enabled FROM users WHERE id = ?', [$userId]);
+    return $row !== null
+        && (int) $row['totp_enabled'] === 1
+        && (string) ($row['totp_secret'] ?? '') !== '';
+}
+
+/** 验证码通过后的公共收尾：会话、日志、统计 */
+function auth_finish_login(int $userId, string $login, string $via = ''): void
+{
+    log_login($userId, $login, 'success', $via !== '' ? $via : null);
+    q_update('users', ['last_login_at' => now()], 'id = ?', [$userId]);
+    Auth::login($userId);
+    activity_log($userId, 'login', null, detect_device(user_agent()));
+    snapshot_today($userId);
+}
+
+/** 登录二步：输入认证器验证码 */
+function auth_totp(): void
+{
+    $pending = (int) ($_SESSION['pending_2fa'] ?? 0);
+    $pendingAt = (int) ($_SESSION['pending_2fa_at'] ?? 0);
+
+    // 没有挂起态或挂起超时（5 分钟），一律回登录页重新来
+    if ($pending <= 0 || $pendingAt <= 0 || time() - $pendingAt > 300 || find_user_by_id($pending) === null) {
+        unset($_SESSION['pending_2fa'], $_SESSION['pending_2fa_at']);
+        redirect(url('auth.login'));
+    }
+
+    $user = find_user_by_id($pending);
+    $login = (string) $user['email'];
+
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+        auth_do_totp($user, $login);
+        return;
+    }
+
+    auth_render('totp', ['values' => ['account' => $login]]);
+}
+
+function auth_do_totp(array $user, string $login): void
+{
+    $errors = [];
+    $viaRecovery = false;
+
+    if (!csrf_verify(is_string($_POST['csrf_token'] ?? null) ? $_POST['csrf_token'] : null)) {
+        $errors['form'] = '会话已过期，请重新提交。';
+    } elseif ((string) ($_POST['cancel'] ?? '') === '1') {
+        // 放弃本次登录
+        unset($_SESSION['pending_2fa'], $_SESSION['pending_2fa_at']);
+        redirect(url('auth.login'));
+    } elseif (login_locked($login, client_ip())) {
+        // 密码已通过、但验证码连续错误：同样计入限流。
+        // 少了这一步，拿到密码的人就能在 5 分钟挂起窗口里反复穷举 6 位码。
+        log_login((int) $user['id'], $login, 'locked', '两步验证触发限流');
+        unset($_SESSION['pending_2fa'], $_SESSION['pending_2fa_at']);
+        $minutes = (int) round(((int) config('lockout_seconds')) / 60);
+        auth_render('login', [
+            'errors' => ['form' => '验证码尝试次数过多，请 ' . $minutes . ' 分钟后重新登录。'],
+            'values' => ['email' => $login],
+        ]);
+        return;
+    } else {
+        $code = (string) ($_POST['code'] ?? '');
+        $ok = totp_verify((string) $user['totp_secret'], $code);
+
+        // 12 位的输入按一次性恢复码处理：认证器丢了还能进来
+        if (!$ok && totp_recovery_looks_like($code)) {
+            $viaRecovery = totp_recovery_consume((int) $user['id'], $code);
+            $ok = $viaRecovery;
+        }
+
+        if (!$ok) {
+            log_login((int) $user['id'], $login, 'fail', '两步验证码错误');
+            $errors['form'] = '验证码不正确或已过期，请重试。';
+        }
+    }
+
+    if ($errors !== []) {
+        auth_render('totp', ['errors' => $errors, 'values' => ['account' => $login]]);
+        return;
+    }
+
+    unset($_SESSION['pending_2fa'], $_SESSION['pending_2fa_at']);
+
+    if ($viaRecovery) {
+        activity_log((int) $user['id'], 'totp.recovery_used');
+        auth_finish_login((int) $user['id'], $login, '使用一次性恢复码登录');
+    } else {
+        auth_finish_login((int) $user['id'], $login, '两步验证通过');
+    }
+
+    redirect(url('files.list'));
 }
 
 function auth_render(string $tab, array $state = []): void
@@ -86,6 +185,7 @@ function auth_render(string $tab, array $state = []): void
             'register' => registration_open() ? '创建账号 · 拾云' : '注册已关闭 · 拾云',
             'forgot'   => '找回密码 · 拾云',
             'reset'    => '重设密码 · 拾云',
+            'totp'     => '两步验证 · 拾云',
             default    => '登录 · 拾云',
         },
         'tab'       => $tab,
@@ -128,12 +228,15 @@ function auth_do_login(): void
                     q_update('users', ['password_hash' => password_hash($password, PASSWORD_DEFAULT)], 'id = ?', [(int) $user['id']]);
                 }
 
-                log_login((int) $user['id'], $login, 'success');
-                q_update('users', ['last_login_at' => now()], 'id = ?', [(int) $user['id']]);
-                Auth::login((int) $user['id']);
-                activity_log((int) $user['id'], 'login', null, detect_device(user_agent()));
+                if (auth_totp_required((int) $user['id'])) {
+                    // 密码通过但开了两步验证：先挂起，验证码通过后才算登录
+                    $_SESSION['pending_2fa'] = (int) $user['id'];
+                    $_SESSION['pending_2fa_at'] = time();
+                    redirect(url('auth.totp'));
+                }
 
-                snapshot_today((int) $user['id']);
+                log_login((int) $user['id'], $login, 'success');
+                auth_finish_login((int) $user['id'], $login);
                 redirect(url('files.list'));
             }
         } else {
