@@ -166,11 +166,8 @@
         }).join('');
     }
 
-    function escapeHtml(str) {
-        return String(str).replace(/[&<>"']/g, (c) => (
-            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-        ));
-    }
+    // 转义函数的唯一实现在 icons.js（本文件与它同包，且 icons.js 总是先执行）
+    const escapeHtml = SY.escapeHtml;
 
     function patch(id, changes) {
         const it = items.get(id);

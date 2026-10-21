@@ -1,5 +1,7 @@
-/* 拾云 · 客户端图标表
-   与 app/icons.php 同源（Lucide 24×24 path 数据）。仅收录 JS 动态生成 UI 用得到的子集。 */
+/* 拾云 · 客户端公共基座
+   本文件是每个页面最先加载的脚本，因此兼放全体共享的东西：
+   1. 图标表（与 app/icons.php 同源，Lucide 24×24 path 数据；仅收录 JS 动态生成 UI 用得到的子集）；
+   2. escapeHtml —— 拼 HTML 时的 XSS 防线，只留这一份实现，避免多处副本各自漂移。 */
 (() => {
     'use strict';
 
@@ -78,7 +80,21 @@
         return svg;
     }
 
+    /**
+     * HTML 转义。放在这里是因为本文件是每个页面最先加载的公共件。
+     *
+     * 这个函数必须只有一份：它是拼 HTML 时的 XSS 防线，抄成几份迟早各自漂移，
+     * 而漂移掉的那份就是漏洞。其余工具（toast / api）按页面语境确有差异，
+     * 留在各自文件里。
+     */
+    function escapeHtml(str) {
+        return String(str).replace(/[&<>"']/g, (c) => (
+            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+        ));
+    }
+
     window.SY = window.SY || {};
     window.SY.icon = icon;
     window.SY.iconPaths = PATHS;
+    window.SY.escapeHtml = escapeHtml;
 })();

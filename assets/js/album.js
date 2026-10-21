@@ -16,6 +16,21 @@
         }
     }, true);
 
+    // 缩略图生成失败时回退到原图。error 事件不冒泡，所以走捕获阶段。
+    // 原来靠 <img onerror="...">，但内联事件处理器被 CSP 禁掉了。
+    album.addEventListener('error', (e) => {
+        const img = e.target;
+        if (!(img instanceof HTMLImageElement) || img.dataset.fallbackDone) {
+            return;
+        }
+        const fallback = img.dataset.fallback;
+        if (!fallback) {
+            return;
+        }
+        img.dataset.fallbackDone = '1';
+        img.src = fallback;
+    }, true);
+
     album.querySelectorAll('.alb__img').forEach((img) => {
         if (img.complete && img.naturalWidth > 0) {
             img.classList.add('is-ready');
@@ -85,10 +100,7 @@
                     img.decoding = 'async';
                     img.alt = n.name;
                     img.addEventListener('load', () => img.classList.add('is-ready'));
-                    img.onerror = () => {
-                        img.onerror = null;
-                        img.src = CFG.base + '?r=preview.raw&id=' + n.id;
-                    };
+                    img.dataset.fallback = CFG.base + '?r=preview.raw&id=' + n.id;
                     img.src = CFG.base + '?r=preview.thumb&id=' + n.id;
                     const cap = document.createElement('span');
                     cap.className = 'alb__cap';

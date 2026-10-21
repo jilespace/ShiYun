@@ -13,13 +13,19 @@ if (!defined('BASE_PATH')) {
 
 function versions_next_no(int $nodeId): int
 {
-    return (int) q_val('SELECT COALESCE(MAX(version_no), 0) + 1 FROM node_versions WHERE node_id = ?', [$nodeId]) + 1;
+    // 空节点应得 1。早先这里在 SQL 的 +1 之外又加了一次，第一个版本号一直是 2。
+    return (int) q_val('SELECT COALESCE(MAX(version_no), 0) + 1 FROM node_versions WHERE node_id = ?', [$nodeId]);
 }
 
 /** 记录一个版本（引用同一份 blob，ref_count +1） */
 function version_snapshot(int $nodeId, int $blobId, int $size, ?string $mime, int $userId): int
 {
     q_exec('UPDATE blobs SET ref_count = ref_count + 1 WHERE id = ?', [$blobId]);
+
+    // 对节点行加锁，把「取号 + 插入」串成一步。两个并发覆盖上传会各自读到同一个
+    // MAX(version_no)，插出两个同号版本。调用方 node_replace_content 已在事务里，
+    // 这把锁会持到那个事务结束。
+    q_val('SELECT id FROM nodes WHERE id = ? FOR UPDATE', [$nodeId]);
 
     return q_insert('node_versions', [
         'node_id'    => $nodeId,

@@ -352,12 +352,16 @@ function shares_open(): void
         share_render($share, $node, 'locked');
     }
 
-    // 浏览计数按会话去重，避免刷新刷量
-    $seen = $_SESSION['share_seen'][(string) $share['token']] ?? 0;
-    if ($seen < time() - 600) {
+    // 计数按「分享 + 来源 IP」在 10 分钟内去重。原来只按会话去重，
+    // 而不带 cookie 的客户端每次请求都会新开一个会话——刷一次页面就多一条访问记录，
+    // view_count 也能被无限刷高。按 IP 去重对正常访客没有影响。
+    $recent = q_val(
+        'SELECT id FROM share_visits WHERE share_id = ? AND ip = ? AND created_at > ? LIMIT 1',
+        [(int) $share['id'], client_ip(), date('Y-m-d H:i:s', time() - 600)]
+    );
+    if ($recent === null) {
         q_exec('UPDATE shares SET view_count = view_count + 1 WHERE id = ?', [(int) $share['id']]);
         share_visit((int) $share['id'], 'view', (int) $node['id']);
-        $_SESSION['share_seen'][(string) $share['token']] = time();
     }
 
     share_render($share, $node, 'ok');
@@ -760,17 +764,28 @@ function shares_upload_complete(): void
         ]);
     }
 
+    // 抢占合并权（同 upload_complete）：只有推得动状态的请求才继续合并。
+    // 没有这一步，并发的两次 complete 会各合各的，给收取箱塞进两个重复文件。
+    // 同时让会话退出「在飞分片」统计，避免配额被算两遍。
+    $claimed = q_exec(
+        "UPDATE upload_sessions SET status = 'merging', updated_at = ?
+         WHERE id = ? AND (status IN ('pending', 'uploading') OR (status = 'merging' AND updated_at < ?))",
+        [now(), (int) $session['id'], date('Y-m-d H:i:s', time() - 600)]
+    );
+    if ($claimed === 0) {
+        json_fail('这次上传正在处理中，请稍候重试。', 409, 'in_progress');
+    }
+
     try {
         $merged = upload_merge_chunks($session);
     } catch (RuntimeException $e) {
+        q_exec("UPDATE upload_sessions SET status = 'uploading', updated_at = ? WHERE id = ? AND status = 'merging'",
+            [now(), (int) $session['id']]);
         json_fail($e->getMessage(), 409, 'incomplete');
     }
 
     $size = (int) filesize($merged);
     $ownerId = (int) $share['user_id'];
-
-    // 退出「在飞分片」统计，避免与随后的节点用量重复计入配额（同 upload_complete）
-    q_update('upload_sessions', ['status' => 'merging', 'updated_at' => now()], 'id = ?', [(int) $session['id']]);
 
     // 名额在合并成功后才扣：中途放弃的分片会话不会白占收取箱的额度
     if ($isInbox) {

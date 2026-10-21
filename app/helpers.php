@@ -36,6 +36,22 @@ function safe_error_message(Throwable $e, string $fallback = '服务器内部错
     return $fallback;
 }
 
+/**
+ * 本次请求的 CSP nonce。
+ *
+ * 页面里有内联脚本（window.__SHIYUN__ 之类），不能一刀切禁掉 inline。
+ * 改成「只放行带这个随机 nonce 的内联脚本」：注入进来的 <script> 没有
+ * nonce，浏览器直接不执行。每次请求换一个，攻击者猜不到。
+ */
+function csp_nonce(): string
+{
+    static $nonce = null;
+    if ($nonce === null) {
+        $nonce = rtrim(strtr(base64_encode(random_bytes(16)), '+/', '-_'), '=');
+    }
+    return $nonce;
+}
+
 /** 拼接内部路由 URL */
 function url(string $route = '', array $params = []): string
 {

@@ -16,7 +16,7 @@ require BASE_PATH . '/app/helpers.php';
 // 统一时区（PHP 侧；MySQL 会话时区在 db() 中按同一配置设置）
 date_default_timezone_set((string) config('timezone', 'Asia/Shanghai'));
 
-// 基础安全响应头（在输出之前下发；因存在内联脚本/样式，暂不启用 CSP）
+// 基础安全响应头（在输出之前下发）
 if (!headers_sent()) {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: SAMEORIGIN');
@@ -25,6 +25,31 @@ if (!headers_sent()) {
     if (($_SERVER['HTTPS'] ?? '') === 'on') {
         header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
     }
+
+    /*
+     * 内容安全策略。
+     *
+     * 内联脚本用 nonce 放行（见 csp_nonce()），所以注入的 <script> 不会执行——
+     * 这是本项目唯一能挡住「万一哪天漏了一处转义」的那层网。样式没法用 nonce：
+     * 页面里有上百处 style="…" 内联属性，只能留 'unsafe-inline'。
+     * 字体走 jsdelivr CDN（见 assets/css/app.css 的 @font-face），必须显式放行。
+     * img/media 只放本站：预览与分享的媒体都走 preview.* / shares.*，不经外部域名。
+     */
+    header(
+        "Content-Security-Policy: "
+        . "default-src 'self'; "
+        . "base-uri 'self'; "
+        . "object-src 'none'; "
+        . "frame-ancestors 'self'; "
+        . "form-action 'self'; "
+        . "img-src 'self' data: blob:; "
+        . "media-src 'self' blob:; "
+        . "frame-src 'self'; "
+        . "font-src 'self' https://cdn.jsdelivr.net; "
+        . "style-src 'self' 'unsafe-inline'; "
+        . "connect-src 'self'; "
+        . "script-src 'self' 'nonce-" . csp_nonce() . "'"
+    );
 }
 require BASE_PATH . '/app/icons.php';
 require BASE_PATH . '/app/schema.php';

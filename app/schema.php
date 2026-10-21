@@ -10,7 +10,7 @@ if (!defined('BASE_PATH')) {
 /**
  * 数据库结构定义。改结构时把 SCHEMA_VERSION 加一，下次请求会自动补建。
  */
-const SCHEMA_VERSION = 16;
+const SCHEMA_VERSION = 17;
 
 /** @return list<string> */
 function schema_statements(): array
@@ -39,6 +39,8 @@ function schema_statements(): array
             totp_enabled    TINYINT(1)      NOT NULL DEFAULT 0,
             -- 会话纪元：改密 / 改两步验证时加一，用来把其它已登录的会话踢下线
             session_epoch   BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            -- 最近一次被接受的两步验证时间步，用来拒绝窗口内的重放
+            totp_last_step  BIGINT UNSIGNED NULL,
             created_at      DATETIME        NOT NULL,
             updated_at      DATETIME        NOT NULL,
             last_login_at   DATETIME        NULL,
@@ -222,7 +224,9 @@ function schema_statements(): array
             KEY idx_node_created (user_id, created_at),
             KEY idx_node_trash (user_id, deleted_at),
             KEY idx_node_blob (blob_id),
-            KEY idx_node_access (user_id, last_access_at)
+            KEY idx_node_access (user_id, last_access_at),
+            -- 「最大的文件」这类排序；没有它就得 filesort 整个用户的文件
+            KEY idx_node_size (user_id, size)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL;
 
@@ -258,7 +262,8 @@ function schema_statements(): array
             created_by BIGINT UNSIGNED NULL,
             created_at DATETIME        NOT NULL,
             PRIMARY KEY (id),
-            KEY idx_ver_node (node_id, version_no)
+            -- 唯一：并发覆盖上传不该给同一个文件插出两个同号版本
+            UNIQUE KEY uk_ver_node (node_id, version_no)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL;
 

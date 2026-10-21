@@ -50,11 +50,8 @@
         setTimeout(() => el.remove(), kind === 'err' ? 4000 : 2400);
     }
 
-    function escapeHtml(str) {
-        return String(str).replace(/[&<>"']/g, (c) => (
-            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-        ));
-    }
+    // 转义函数的唯一实现在 icons.js（本文件与它同包，且 icons.js 总是先执行）
+    const escapeHtml = SY.escapeHtml;
 
     /* ══════════════════════════════════════════════════════ 弹窗 */
 

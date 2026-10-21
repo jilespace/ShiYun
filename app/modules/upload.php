@@ -278,7 +278,11 @@ function upload_merge_chunks(array $session): string
     fclose($out);
 
     $size = (int) filesize($merged);
-    if ($size !== (int) $session['size'] && (int) $session['size'] > 0) {
+    $declared = (int) $session['size'];
+    // 声明为 0（未知大小）时没有精确值可比，但仍要压在一个分片大小以内——
+    // 上传阶段已经这么限制了，这里再兜一次，免得这条路径成为绕过大小校验的后门。
+    $cap = $declared > 0 ? $declared : (int) $session['chunk_size'];
+    if (($declared > 0 && $size !== $declared) || ($cap > 0 && $size > $cap)) {
         @unlink($merged);
         throw new RuntimeException('合并后大小与声明不符，请重新上传。');
     }
@@ -346,17 +350,29 @@ function upload_complete(): void
         json_ok(['node' => node_public(node_attach_meta($userId, [node_require($userId, (int) $session['node_id'])])[0])]);
     }
 
+    // 抢占合并权：只有把会话从 pending/uploading 推到 merging 的那个请求才继续。
+    // 否则并发的两次 complete 会各合各的，落出两个重复节点。
+    // 同时也让会话退出「在飞分片」统计，避免配额被算两遍（分片一次、节点一次）。
+    // merging 超过 10 分钟视为上次执行中断，允许重试——否则会话会永久卡住。
+    $claimed = q_exec(
+        "UPDATE upload_sessions SET status = 'merging', updated_at = ?
+         WHERE id = ? AND (status IN ('pending', 'uploading') OR (status = 'merging' AND updated_at < ?))",
+        [now(), (int) $session['id'], date('Y-m-d H:i:s', time() - 600)]
+    );
+    if ($claimed === 0) {
+        json_fail('这次上传正在处理中，请稍候重试。', 409, 'in_progress');
+    }
+
     try {
         $merged = upload_merge_chunks($session);
     } catch (RuntimeException $e) {
+        // 交还会话，好让客户端补完缺的分片再试
+        q_exec("UPDATE upload_sessions SET status = 'uploading', updated_at = ? WHERE id = ? AND status = 'merging'",
+            [now(), (int) $session['id']]);
         json_fail($e->getMessage(), 409, 'incomplete');
     }
 
     $size = (int) filesize($merged);
-
-    // 合并已开始，这些分片马上要折算成节点用量。先把会话标成 merging 让它退出
-    // 「在飞占用」的统计，否则配额会被算两遍（分片一次、节点一次）。
-    q_update('upload_sessions', ['status' => 'merging', 'updated_at' => now()], 'id = ?', [(int) $session['id']]);
 
     // 目标目录（可能来自文件夹上传的相对路径）
     $parentId = (int) $session['parent_id'];

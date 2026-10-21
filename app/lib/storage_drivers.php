@@ -198,6 +198,37 @@ function source_risk_note(array $source): ?string
     return null;
 }
 
+/**
+ * 本地存储源 root 的硬校验。返回错误文案，通过返回 null。
+ *
+ * 允许挂到站点目录之外的任意位置（挂 NAS、挂数据盘都是正常用法），
+ * 但不允许落在站点目录里——那些目录由 Web 服务器直接对外，写进去的
+ * 哈希命名文件会被当静态资源发出去。runtime/ 是例外：nginx 已 deny。
+ */
+function local_root_error(string $root): ?string
+{
+    $root = trim($root);
+    if ($root === '') {
+        return null;   // 留空即用内置内容仓
+    }
+
+    $real = realpath($root);
+    if ($real === false || !is_dir($real)) {
+        return '目录不存在或不可访问：' . $root;
+    }
+
+    $base = realpath(BASE_PATH);
+    $storage = realpath((string) config('storage_path'));
+    if ($base !== false && str_starts_with($real, $base . DIRECTORY_SEPARATOR)) {
+        $runtime = $storage !== false ? dirname($storage) : $base . '/runtime';
+        if (!str_starts_with($real, $runtime)) {
+            return '本地存储目录不能放在站点目录内（runtime/ 除外），否则用户文件会暴露在 Web 根下。';
+        }
+    }
+
+    return null;
+}
+
 /* ------------------------------------------------------------ 连通性测试 */
 
 /** @return array{ok:bool,message:string} */
@@ -299,6 +330,17 @@ function storage_test_s3(array $c): array
     return ['ok' => false, 'message' => 'HTTP ' . $res['status'] . ' ' . mb_substr($res['body'], 0, 160)];
 }
 
+/**
+ * 把目录路径塞进 sftp 批处理文件之前先清洗。
+ *
+ * sftp 的 -b 批处理按行解析，路径里只要有一个换行就能再塞进一条命令
+ * （'cd x' + "\n" + 'rm -r /'）。sftp 批处理没有转义机制，只能把控制字符去掉。
+ */
+function sftp_batch_dir(string $dir): string
+{
+    return (string) preg_replace('/[\x00-\x1F\x7F]/', '', $dir);
+}
+
 function storage_test_sftp(array $c): array
 {
     $binary = command_path('sftp');
@@ -313,7 +355,7 @@ function storage_test_sftp(array $c): array
 
     $port = (int) ($c['port'] ?? 22);
     $dir = (string) ($c['dir'] ?? '.');
-    $batch = implode("\n", ['cd ' . $dir, 'pwd', 'bye']);
+    $batch = implode("\n", ['cd ' . sftp_batch_dir($dir), 'pwd', 'bye']);
 
     $cmd = sprintf(
         '%s -b - -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=8 -P %d -i %s %s@%s 2>&1',
@@ -686,7 +728,7 @@ function storage_source_put(array $source, string $contentHash, string $localPat
             }
             $dir = rtrim((string) ($config['dir'] ?? '.'), '/');
             $batch = implode("\n", [
-                'cd ' . $dir,
+                'cd ' . sftp_batch_dir($dir),
                 '-mkdir ' . substr($key, 0, 2),
                 'put ' . escapeshellarg($localPath) . ' ' . $key,
                 'bye',

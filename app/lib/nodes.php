@@ -360,23 +360,28 @@ function node_create_folder(int $userId, int $parentId, string $name): array
         throw new RuntimeException('同一目录下已存在同名文件夹');
     }
 
-    $id = q_insert('nodes', [
-        'user_id'    => $userId,
-        'parent_id'  => $parentId,
-        'name'       => $name,
-        'name_key'   => mb_strtolower($name),
-        'kind'       => 'folder',
-        'size'       => 0,
-        'path'       => (string) $parent['path'],   // 占位，插入后立即用真实 id 重算
-        'depth'      => (int) $parent['depth'] + 1,
-        'is_private' => node_in_private($userId, $parent) ? 1 : 0,
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
+    // 插入 + 回填真实路径 + 刷新计数必须原子：中途失败会留下 path 仍是占位值
+    // （只有父路径、没有自己的 id）的节点，它和它的子节点此后都会定位错乱。
+    $id = db_tx(static function () use ($userId, $parentId, $parent, $name): int {
+        $newId = q_insert('nodes', [
+            'user_id'    => $userId,
+            'parent_id'  => $parentId,
+            'name'       => $name,
+            'name_key'   => mb_strtolower($name),
+            'kind'       => 'folder',
+            'size'       => 0,
+            'path'       => (string) $parent['path'],   // 占位，插入后立即用真实 id 重算
+            'depth'      => (int) $parent['depth'] + 1,
+            'is_private' => node_in_private($userId, $parent) ? 1 : 0,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
 
-    $path = (string) $parent['path'] . $id . '/';
-    q_update('nodes', ['path' => $path], 'id = ?', [$id]);
-    node_refresh_child_count($userId, $parentId);
+        q_update('nodes', ['path' => (string) $parent['path'] . $newId . '/'], 'id = ?', [$newId]);
+        node_refresh_child_count($userId, $parentId);
+
+        return $newId;
+    });
 
     return node_require($userId, $id);
 }
@@ -401,14 +406,16 @@ function node_create_file(int $userId, int $parentId, string $name, array $blob,
     $mime ??= mime_of($name);
     $ext ??= ext_of($name);
 
-    // 配额在这里原子地把关。assert_quota() 是先看后写，两个并发上传能双双通过；
-    // 这条带条件的 UPDATE 抢不到就直接抛，调用方的错误分支负责收尾。
-    if (!quota_claim($userId, (int) $blob['size'])) {
-        throw new RuntimeException('存储空间不足，请清理文件或扩容。');
-    }
+    // 配额占用 + 插入 + 回填真实路径 + 刷新计数放在一个事务里。
+    // 配额那条带条件的 UPDATE 是「先写后判」，两个并发上传不可能同时通过
+    // （assert_quota() 是先看后写，只能当预检）；包进事务则中途失败会
+    // 连同配额预留一起回滚，也不会留下 path 仍是占位值的半成品节点。
+    $id = db_tx(static function () use ($userId, $parentId, $parent, $name, $blob, $mime, $ext): int {
+        if (!quota_claim($userId, (int) $blob['size'])) {
+            throw new RuntimeException('存储空间不足，请清理文件或扩容。');
+        }
 
-    try {
-        $id = q_insert('nodes', [
+        $newId = q_insert('nodes', [
             'user_id'    => $userId,
             'parent_id'  => $parentId,
             'name'       => $name,
@@ -425,12 +432,11 @@ function node_create_file(int $userId, int $parentId, string $name, array $blob,
             'updated_at' => now(),
         ]);
 
-        q_update('nodes', ['path' => (string) $parent['path'] . $id . '/'], 'id = ?', [$id]);
+        q_update('nodes', ['path' => (string) $parent['path'] . $newId . '/'], 'id = ?', [$newId]);
         node_refresh_child_count($userId, $parentId);
-    } catch (Throwable $e) {
-        user_add_usage($userId, -(int) $blob['size']);   // 撤销刚才的预留
-        throw $e;
-    }
+
+        return $newId;
+    });
 
     return node_require($userId, $id);
 }
@@ -667,11 +673,13 @@ function node_trash_prefix(int $userId): string
  */
 function node_touch_access(int $userId, int $nodeId): void
 {
-    q_exec(
-        'UPDATE nodes SET last_access_at = ?
-         WHERE id = ? AND user_id = ? AND (last_access_at IS NULL OR last_access_at < ?)',
-        [now(), $nodeId, $userId, date('Y-m-d H:i:s', time() - 3600)]
-    );
+    // 先读后写。直接发那条带条件的 UPDATE，命中不了也会锁住被检查的行，
+    // 而视频拖动进度条会并发打同一行；先做一次普通读（不加锁）就能避开。
+    $last = q_val('SELECT last_access_at FROM nodes WHERE id = ? AND user_id = ?', [$nodeId, $userId]);
+    if ($last !== null && strtotime((string) $last) >= time() - 3600) {
+        return;
+    }
+    q_exec('UPDATE nodes SET last_access_at = ? WHERE id = ? AND user_id = ?', [now(), $nodeId, $userId]);
 }
 
 /* -------------------------------------------------------------- 回收站 */

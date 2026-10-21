@@ -41,10 +41,13 @@ $layoutUser = Auth::check() ? Auth::user() : null;
     <div class="grain" aria-hidden="true"></div>
     <div class="vignette" aria-hidden="true"></div>
     <?= $content ?>
-    <script>
+    <script nonce="<?= e(csp_nonce()) ?>">
+    <?php /* 内联 JSON 一律带 JSON_HEX_TAG：默认的 \/ 转义已经挡住了 </script>，
+             但那是 json_encode 的默认行为，谁加个 JSON_UNESCAPED_SLASHES 就破了。
+             显式把 < > & ' " 都转成 \uXXXX，不依赖默认值。 */ ?>
     window.__SHIYUN__ = {
-        csrf: <?= json_encode(csrf_token(), JSON_UNESCAPED_UNICODE) ?>,
-        route: <?= json_encode((string) ($_GET['r'] ?? ''), JSON_UNESCAPED_UNICODE) ?>,
+        csrf: <?= json_encode(csrf_token(), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?>,
+        route: <?= json_encode((string) ($_GET['r'] ?? ''), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?>,
         user: <?= $layoutUser === null ? 'null' : json_encode([
             'id'          => (int) $layoutUser['id'],
             'name'        => (string) $layoutUser['display_name'],
@@ -52,10 +55,10 @@ $layoutUser = Auth::check() ? Auth::user() : null;
             'quota'       => (int) $layoutUser['quota_bytes'],
             'used'        => (int) $layoutUser['used_bytes'],
             'privateOpen' => Auth::privateUnlocked(),
-        ], JSON_UNESCAPED_UNICODE) ?>,
+        ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?>,
         chunkSize: <?= (int) config('chunk_size') ?>,
         maxUpload: <?= (int) config('max_upload') ?>,
-        base: <?= json_encode(url(''), JSON_UNESCAPED_UNICODE) ?>
+        base: <?= json_encode(url(''), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?>
     };
     </script>
     <script src="<?= e(asset_url('/assets/js/app.js')) ?>" defer></script>

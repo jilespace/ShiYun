@@ -147,7 +147,9 @@ function auth_do_totp(array $user, string $login): void
         return;
     } else {
         $code = (string) ($_POST['code'] ?? '');
-        $ok = totp_verify((string) $user['totp_secret'], $code);
+        // 取号 + 消费：同一个码在 ±1 时间片内只认一次（防重放）
+        $step = totp_match_step((string) $user['totp_secret'], $code);
+        $ok = $step !== null && totp_consume_step((int) $user['id'], $step);
 
         // 12 位的输入按一次性恢复码处理：认证器丢了还能进来
         if (!$ok && totp_recovery_looks_like($code)) {

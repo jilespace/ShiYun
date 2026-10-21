@@ -69,11 +69,8 @@
 
     /* ══════════════════════════════════════════════════════════ 工具 */
 
-    function escapeHtml(str) {
-        return String(str).replace(/[&<>"']/g, (c) => (
-            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-        ));
-    }
+    // 转义函数的唯一实现在 icons.js（本文件与它同包，且 icons.js 总是先执行）
+    const escapeHtml = SY.escapeHtml;
 
     function humanSize(bytes) {
         const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
@@ -83,7 +80,6 @@
         return (i === 0 ? Math.round(v) : v.toFixed(1)) + ' ' + units[i];
     }
 
-    SY.escapeHtml = escapeHtml;
     SY.humanSize = humanSize;
 
     /** 刷新侧栏容量仪表（增删文件后调用） */
@@ -141,6 +137,14 @@
 
     function openModal(title, bodyHtml, footHtml, closeFn) {
         if (!modal) return;
+        // 上一个弹窗还没关就又开一个：先把它的收尾跑掉。
+        // onClose 常常是 confirm()/prompt() 的 resolve，丢掉它那个 Promise 就永不结算，
+        // 调用方会一直挂在 await 上。
+        if (onClose !== null) {
+            const prev = onClose;
+            onClose = null;
+            prev();
+        }
         lastFocus = document.activeElement;
         modalTitle.textContent = title;
         modalBody.innerHTML = bodyHtml;

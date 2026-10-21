@@ -66,7 +66,7 @@ if (!defined('BASE_PATH')) {
                                    title="<?= e((string) $n['name']) ?>">
                                     <img class="alb__img" loading="lazy" decoding="async" alt="<?= e((string) $n['name']) ?>"
                                          src="<?= e(url('preview.thumb', ['id' => (int) $n['id']])) ?>"
-                                         onerror="this.onerror=null;this.src='<?= e(url('preview.raw', ['id' => (int) $n['id']])) ?>'">
+                                         data-fallback="<?= e(url('preview.raw', ['id' => (int) $n['id']])) ?>">
                                     <span class="alb__cap"><?= e((string) $n['name']) ?></span>
                                 </a>
                             <?php endforeach; ?>

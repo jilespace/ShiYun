@@ -81,6 +81,13 @@ function sources_create(): void
         $clean[$field['key']] = $value;
     }
 
+    if ($driver === 'local') {
+        $err = local_root_error((string) ($clean['root'] ?? ''));
+        if ($err !== null) {
+            json_fail($err, 422);
+        }
+    }
+
     $id = q_insert('storage_sources', [
         'user_id'    => $userId,
         'name'       => $name,
@@ -132,6 +139,12 @@ function sources_update(): void
                 continue;
             }
             $merged[$key] = $value;
+        }
+        if ($source['driver'] === 'local') {
+            $err = local_root_error((string) ($merged['root'] ?? ''));
+            if ($err !== null) {
+                json_fail($err, 422);
+            }
         }
         $patch['config'] = json_encode($merged, JSON_UNESCAPED_UNICODE);
     }

@@ -17,7 +17,8 @@ const OOXML_W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const OOXML_S = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const OOXML_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 
-const OOXML_MAX_BYTES  = 20 * 1024 * 1024;   // 单个 Office 文件解析上限
+const OOXML_MAX_BYTES  = 20 * 1024 * 1024;   // 单个 Office 文件解析上限（压缩后）
+const OOXML_MAX_ENTRY  = 32 * 1024 * 1024;   // 单个 XML 部件解压后的上限（压缩比炸弹）
 const OOXML_MAX_PARA   = 4000;               // docx 段落上限
 const OOXML_MAX_ROWS   = 3000;               // xlsx 单表行数上限
 const OOXML_MAX_COLS   = 200;                // xlsx 单表列数上限
@@ -34,6 +35,13 @@ function ooxml_open(string $path): ?ZipArchive
 
 function ooxml_xml(ZipArchive $zip, string $entry): ?DOMDocument
 {
+    // OOXML_MAX_BYTES 卡的是压缩后的体积，而一个几十 KB 的 docx 可以把
+    // document.xml 膨胀到几个 GB——必须先看解压后的大小，再决定读不读。
+    $stat = $zip->statName($entry);
+    if ($stat === false || (int) $stat['size'] > OOXML_MAX_ENTRY) {
+        return null;
+    }
+
     $raw = $zip->getFromName($entry);
     if ($raw === false || $raw === '') {
         return null;

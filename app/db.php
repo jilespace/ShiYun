@@ -107,6 +107,32 @@ function db_migrate(PDO $pdo): void
         $pdo->exec('ALTER TABLE users ADD COLUMN session_epoch BIGINT UNSIGNED NOT NULL DEFAULT 0 AFTER totp_enabled');
     }
 
+    // users.totp_last_step：两步验证码的防重放游标
+    $userCols3 = array_column($pdo->query('SHOW COLUMNS FROM users')->fetchAll(), 'Field');
+    if (!in_array('totp_last_step', $userCols3, true)) {
+        $pdo->exec('ALTER TABLE users ADD COLUMN totp_last_step BIGINT UNSIGNED NULL AFTER session_epoch');
+    }
+
+    // nodes(user_id, size)：「最大的文件」这类排序不必 filesort 整个用户的文件
+    $nodeIdx3 = array_column($pdo->query('SHOW INDEX FROM nodes')->fetchAll(), 'Key_name');
+    if (!in_array('idx_node_size', $nodeIdx3, true)) {
+        $pdo->exec('ALTER TABLE nodes ADD INDEX idx_node_size (user_id, size)');
+    }
+
+    // node_versions 的 (node_id, version_no) 升级为唯一键。老库里若已有重复版本，
+    // 加键会失败——那就记一笔跳过，取号处的行锁已经能防住新的重复。
+    $verIdx = array_column($pdo->query('SHOW INDEX FROM node_versions')->fetchAll(), 'Key_name');
+    if (!in_array('uk_ver_node', $verIdx, true)) {
+        try {
+            $pdo->exec('ALTER TABLE node_versions ADD UNIQUE KEY uk_ver_node (node_id, version_no)');
+            if (in_array('idx_ver_node', $verIdx, true)) {
+                $pdo->exec('ALTER TABLE node_versions DROP INDEX idx_ver_node');
+            }
+        } catch (Throwable $e) {
+            error_log('node_versions 唯一键未建立（可能存在历史重复版本）：' . $e->getMessage());
+        }
+    }
+
     // activities / login_logs 的 created_at 索引：定时清理按时间删，否则每分钟全表扫
     foreach (['activities' => 'idx_act_created', 'login_logs' => 'idx_login_created'] as $tbl => $idxName) {
         $cols = array_column($pdo->query('SHOW INDEX FROM ' . $tbl)->fetchAll(), 'Key_name');

@@ -199,6 +199,20 @@ function security_twofactor_action(): void
         security_render_twofactor($user, ['form' => $message]);
     };
 
+    // 设置页的验证码校验统一走这里：防重放 + 复用登录限流。
+    // 不限制的话，拿到会话的人可以在这里无限穷举 6 位码。
+    $verifyTotp = static function (string $message) use ($user, $code, $secret, $fail, $userId): void {
+        if (login_locked((string) $user['email'], client_ip())) {
+            log_login($userId, (string) $user['email'], 'locked', '两步验证触发限流（设置页）');
+            $fail('尝试次数过多，请稍后再试。');
+        }
+        $step = totp_match_step($secret, $code);
+        if ($step === null || !totp_consume_step($userId, $step)) {
+            log_login($userId, (string) $user['email'], 'fail', '两步验证码错误（设置页）');
+            $fail($message);
+        }
+    };
+
     if ($action === 'begin') {
         if ($enabled) {
             redirect(url('security.twofactor'));
@@ -220,9 +234,7 @@ function security_twofactor_action(): void
         if ($enabled || $secret === '') {
             redirect(url('security.twofactor'));
         }
-        if (!totp_verify($secret, $code)) {
-            $fail('验证码不正确，请确认认证器时间与手机时间一致后重试。');
-        }
+        $verifyTotp('验证码不正确，请确认认证器时间与手机时间一致后重试。');
         q_update('users', ['totp_enabled' => 1], 'id = ?', [$userId]);
         // 第二因子的状态变了，其它设备上的旧会话不能继续免验证使用
         revoke_other_sessions($userId);
@@ -237,9 +249,7 @@ function security_twofactor_action(): void
             redirect(url('security.twofactor'));
         }
         // 重发等于作废旧的，必须先用动态码证明本人持有认证器
-        if (!totp_verify($secret, $code)) {
-            $fail('验证码不正确，无法重新生成恢复码。');
-        }
+        $verifyTotp('验证码不正确，无法重新生成恢复码。');
         $_SESSION['totp_recovery_show'] = totp_recovery_generate($userId);
         activity_log($userId, 'totp.recovery_regen');
         redirect(url('security.twofactor'));
@@ -249,9 +259,7 @@ function security_twofactor_action(): void
         if (!$enabled) {
             redirect(url('security.twofactor'));
         }
-        if (!totp_verify($secret, $code)) {
-            $fail('验证码不正确。');
-        }
+        $verifyTotp('验证码不正确。');
         if (!password_verify((string) ($_POST['password'] ?? ''), (string) $user['password_hash'])) {
             $fail('登录密码不正确。');
         }

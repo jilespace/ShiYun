@@ -83,21 +83,47 @@ function totp_code(string $b32Secret, ?int $counter = null): string
     return str_pad((string) ($value % 1_000_000), 6, '0', STR_PAD_LEFT);
 }
 
-/** 校验验证码；允许 ±1 个时间片（30s）的时钟偏移 */
-function totp_verify(string $b32Secret, string $code, int $window = 1): bool
+/**
+ * 校验验证码，返回命中的时间步；不匹配返回 null。
+ *
+ * 返回步号是为了防重放：允许 ±1 个时间片意味着同一个码在约 90 秒内可以
+ * 反复通过。调用方把命中的步号交给 totp_consume_step() 记下来，
+ * 下次就要求严格大于它。
+ */
+function totp_match_step(string $b32Secret, string $code, int $window = 1): ?int
 {
     $code = preg_replace('/\D/', '', $code) ?? '';
     if (strlen($code) !== 6) {
-        return false;
+        return null;
     }
 
     $counter = (int) floor(time() / 30);
     for ($i = -$window; $i <= $window; $i++) {
-        if (hash_equals(totp_code($b32Secret, $counter + $i), $code)) {
-            return true;
+        $step = $counter + $i;
+        if (hash_equals(totp_code($b32Secret, $step), $code)) {
+            return $step;
         }
     }
-    return false;
+    return null;
+}
+
+/** 校验验证码；允许 ±1 个时间片（30s）的时钟偏移。不做防重放。 */
+function totp_verify(string $b32Secret, string $code, int $window = 1): bool
+{
+    return totp_match_step($b32Secret, $code, $window) !== null;
+}
+
+/**
+ * 消费一个时间步：只有严格大于上次用过的才被接受。
+ * 条件写在 UPDATE 里，并发提交同一个码时也只有一个能成功。
+ */
+function totp_consume_step(int $userId, int $step): bool
+{
+    return q_exec(
+        'UPDATE users SET totp_last_step = ?
+         WHERE id = ? AND (totp_last_step IS NULL OR totp_last_step < ?)',
+        [$step, $userId, $step]
+    ) === 1;
 }
 
 /** 认证器扫码用的 otpauth:// URI */

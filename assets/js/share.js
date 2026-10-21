@@ -213,6 +213,14 @@
             input.click();
         });
 
+        // 这块区域是 role="button"：键盘触发必须与点击等价（Enter / 空格）
+        drop.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            if (input.disabled) return;
+            input.click();
+        });
+
         input.addEventListener('change', () => {
             Array.from(input.files || []).forEach(handle);
             input.value = '';

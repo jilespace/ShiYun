@@ -952,10 +952,18 @@
     /* ══════════════════════════════════════════════════════════ 右键菜单 */
 
     const ctx = $('[data-ctx]');
+    let ctxReturnFocus = null;
 
     function closeCtx() {
+        // 焦点还在菜单里才需要还回去（Esc/选中项之后）。鼠标点到别处关掉时
+        // 焦点已经跑到别处了，抢回来只会碍事。
+        const hadFocus = ctx.contains(document.activeElement);
         ctx.hidden = true;
         ctx.innerHTML = '';
+        if (hadFocus && ctxReturnFocus && ctxReturnFocus.isConnected) {
+            ctxReturnFocus.focus();
+        }
+        ctxReturnFocus = null;
     }
 
     function openCtx(x, y, node) {
@@ -1002,6 +1010,33 @@
         const rect = ctx.getBoundingClientRect();
         ctx.style.left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 10)) + 'px';
         ctx.style.top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 10)) + 'px';
+
+        // 键盘可达：焦点移进菜单，方向键在项间移动，Esc 关闭。
+        // 触发它的「更多操作」是真实按钮，键盘用户本来就打得开菜单，
+        // 缺的只是打开之后能操作。
+        ctxReturnFocus = document.activeElement;
+        const ctxItems = $$('[data-ctx-act]', ctx);
+        if (ctxItems.length > 0) {
+            ctxItems[0].focus();
+        }
+        ctx.onkeydown = (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeCtx();
+                return;
+            }
+            if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') {
+                return;
+            }
+            e.preventDefault();
+            const list = $$('[data-ctx-act]', ctx);
+            if (list.length === 0) return;
+            const at = list.indexOf(document.activeElement);
+            const next = e.key === 'ArrowDown'
+                ? (at < 0 ? 0 : Math.min(list.length - 1, at + 1))
+                : (at <= 0 ? 0 : at - 1);
+            list[next].focus();
+        };
 
         ctx.onclick = (e) => {
             const btn = e.target.closest('[data-ctx-act]');

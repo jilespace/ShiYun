@@ -34,6 +34,18 @@
         return data;
     }
 
+    // 带 data-confirm 的普通 POST 表单：提交前二次确认。
+    // 原来写成 onsubmit="return confirm(...)"，但内联事件处理器被 CSP 禁掉了。
+    // 排除 data-api 的表单——那些走下面的 AJAX 提交，preventDefault 拦不住
+    // 另一个监听器，会导致「点了取消照旧提交」。
+    $$('form[data-confirm]:not([data-api])').forEach((form) => {
+        form.addEventListener('submit', (e) => {
+            if (!window.confirm(form.dataset.confirm)) {
+                e.preventDefault();
+            }
+        });
+    });
+
     $$('form[data-api]').forEach((form) => {
         form.addEventListener('submit', async (e) => {
             e.preventDefault();

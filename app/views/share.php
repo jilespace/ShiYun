@@ -210,7 +210,10 @@ $crumbs = array_values(array_filter($crumbs ?? [], static fn (array $c): bool =>
                         </div>
                     <?php endif; ?>
 
-                    <div class="dropmini" data-share-drop style="margin-top:20px">
+                    <?php /* 整块区域都是「选择文件」的入口，所以它必须能聚焦、能用键盘触发。
+                             只做点击的话，键盘与读屏用户根本没法投递。 */ ?>
+                    <div class="dropmini" data-share-drop style="margin-top:20px"
+                         role="button" tabindex="0" aria-label="选择要上传的文件">
                         <?= lucide('cloud-upload') ?>
                         <p class="dropmini__title">把文件拖到这里，或点击选择</p>
                         <p class="dropmini__hint">

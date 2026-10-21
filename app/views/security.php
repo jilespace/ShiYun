@@ -104,7 +104,7 @@ if (!defined('BASE_PATH')) {
                                     文件本身不会被删除或移动。
                                 </p>
                                 <form method="post" action="<?= e(url('security.private')) ?>" style="margin-top:16px"
-                                      onsubmit="return confirm('移除密码后私密空间将不再受保护，确定继续？')">
+                                      data-confirm="移除密码后私密空间将不再受保护，确定继续？">
                                     <?= csrf_field() ?>
                                     <input type="hidden" name="action" value="remove">
                                     <label class="mfield">

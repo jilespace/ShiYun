@@ -320,7 +320,7 @@ if (!$isTrash) {
 
 <?php view('partials/modal') ?>
 
-<script>
+<script nonce="<?= e(csp_nonce()) ?>">
 // 首屏的行是服务端渲染的，但 files.js 的 state.nodes 只在 renderList() 里被填充。
 // 不把同一份数据交给前端的话，刚打开页面时全选、右键菜单、行内「更多操作」
 // 以及重命名/移动/复制/删除等全部对话框都会静默失效，直到发生一次 AJAX 刷新才「自己好了」。
