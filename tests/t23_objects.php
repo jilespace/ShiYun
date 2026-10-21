@@ -284,6 +284,18 @@ check(str_contains($js, 'state.accounts.some'), '前端校正已删除账号的�
 $css = (string) file_get_contents(BASE_PATH . '/assets/css/console.css');
 check(!str_contains($css, 'var(--accent)'), '对象存储样式使用已定义的主题变量');
 
+echo "\n· 桶接口\n";
+$module = (string) file_get_contents(BASE_PATH . '/app/modules/objects.php');
+check(str_contains($module, 'function objects_buckets'), '桶列表接口存在');
+check(str_contains($module, 'function objects_bucket_bind'), '绑定接口存在');
+check(str_contains($module, 'function objects_assert_mutable'), '写操作有绑定守卫');
+$js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
+check(str_contains($js, '__objectsLoadBuckets'), '前端加载桶列表');
+check(str_contains($js, 'objects.bucket_create'), '前端可建桶');
+check(str_contains($js, 'objects.bucket_bind'), '前端可绑定桶');
+check(str_contains($js, 'objects.bucket_delete'), '前端可删桶');
+check(str_contains($js, 'objects.bucket_purge'), '前端可清空桶');
+
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
 q_exec('DELETE FROM user_settings WHERE user_id IN (?, ?)', [$uid, $otherId]);

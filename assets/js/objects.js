@@ -201,6 +201,162 @@
     /* 后续任务在这里挂载：桶列表、对象列表、上传、设置 */
     window.__objects = { state, cfg, el, account, updateQuery, renderAccounts };
 
+    /* ---------------------------------------------------------- 桶概览 */
+
+    async function loadBuckets() {
+        if (!state.account) return;
+        el.grid.innerHTML = '<div class="blank">' + icon('loader')
+            + '<p class="blank__hint">正在读取桶列表…</p></div>';
+        try {
+            const data = await api('objects.buckets', { account: state.account }, { method: 'GET' });
+            renderBuckets(data.buckets || []);
+        } catch (err) {
+            // 子账号可能没有 ListBuckets 权限；给一条直接按桶名进入的路
+            el.grid.innerHTML = '<div class="blank">' + icon('alert-triangle')
+                + '<p class="blank__title">读不到桶列表</p>'
+                + '<p class="blank__hint">' + escapeHtml(err.message) + '</p>'
+                + '<div class="objbar" style="justify-content:center;margin-top:12px">'
+                + '<input class="minput" data-manual-bucket placeholder="直接输入桶名，例如 photos-1250000000">'
+                + '<button class="chipbtn" type="button" data-manual-enter>直接进入</button>'
+                + '</div></div>';
+        }
+    }
+    window.__objectsLoadBuckets = loadBuckets;
+
+    function renderBuckets(buckets) {
+        if (!buckets.length) {
+            el.grid.innerHTML = '<div class="blank">' + icon('database')
+                + '<p class="blank__title">这个账号下还没有桶</p>'
+                + '<p class="blank__hint">点右上角「新建桶」建一个，建完就能绑定为存储源。</p></div>';
+            return;
+        }
+        el.grid.innerHTML = '<div class="objgrid">' + buckets.map((b) => {
+            const name = escapeHtml(b.name);
+            const bound = b.bound
+                ? '<span class="pill">' + escapeHtml(b.boundBy) + '</span>'
+                : '<span class="muted">未绑定</span>';
+            return '<button class="objcard" type="button" data-bucket-open="' + name + '">'
+                + '<span class="objcard__name">' + icon('database') + '<span>' + name + '</span></span>'
+                + '<span class="objcard__meta">'
+                + '<span>' + escapeHtml(b.region || '—') + '</span>'
+                + '<span>' + escapeHtml(b.created ? b.created.slice(0, 10) : '—') + '</span>'
+                + '</span><span class="objcard__meta">' + bound + '</span></button>';
+        }).join('') + '</div>';
+    }
+
+    el.grid.addEventListener('click', (e) => {
+        const manual = e.target.closest('[data-manual-enter]');
+        if (manual) {
+            const input = el.grid.querySelector('[data-manual-bucket]');
+            const name = (input?.value || '').trim().toLowerCase();
+            if (!name) { toast('请输入桶名', 'err'); return; }
+            state.bucket = name;
+            state.prefix = '';
+            state.cursor = '';
+            state.history = [];
+            state.selected.clear();
+            renderAccounts();
+            window.__objectsEnterBucket();
+            return;
+        }
+
+        const card = e.target.closest('[data-bucket-open]');
+        if (card) {
+            state.bucket = card.dataset.bucketOpen;
+            state.prefix = '';
+            state.cursor = '';
+            state.history = [];
+            state.selected.clear();
+            renderAccounts();
+            if (typeof window.__objectsEnterBucket === 'function') window.__objectsEnterBucket();
+        }
+    });
+
+    $('[data-bucket-reload]')?.addEventListener('click', loadBuckets);
+    $('[data-bucket-new]')?.addEventListener('click', async () => {
+        const name = await SY.prompt('新建存储桶', '桶名', '', '小写字母、数字、- 与 .；COS 需带 -APPID');
+        if (name === null) return;
+        try {
+            const r = await api('objects.bucket_create', { account: state.account, bucket: name.trim() });
+            toast(r.message || '桶已创建');
+            loadBuckets();
+        } catch (err) {
+            toast(err.message, 'err');
+        }
+    });
+
+    function renderDetailHead() {
+        el.title.textContent = state.bucket;
+        const boundBy = state.bound[state.bucket];
+        el.detailActs.innerHTML = boundBy
+            ? '<span class="pill">' + escapeHtml(boundBy) + '</span>'
+            : '<button class="chipbtn" type="button" data-bucket-bind>'
+                + icon('link') + '绑定为存储源</button>'
+                + '<button class="chipbtn" type="button" data-bucket-purge>清空桶</button>'
+                + '<button class="chipbtn chipbtn--danger" type="button" data-bucket-del>删除桶</button>';
+    }
+    window.__objectsEnterBucket = function () {
+        el.bucketView.hidden = true;
+        el.detailView.hidden = false;
+        renderDetailHead();
+        updateQuery();
+        if (typeof window.__objectsLoadObjects === 'function') window.__objectsLoadObjects();
+    };
+    $('[data-detail-back]')?.addEventListener('click', () => {
+        state.bucket = '';
+        state.prefix = '';
+        state.selected.clear();
+        renderAccounts();
+        loadBuckets();
+    });
+
+    el.detailActs.addEventListener('click', async (e) => {
+        if (e.target.closest('[data-bucket-bind]')) {
+            try {
+                const r = await api('objects.bucket_bind', {
+                    account: state.account, bucket: state.bucket, name: state.bucket,
+                });
+                toast('已绑定为存储源「' + r.name + '」');
+                setTimeout(() => location.reload(), 600);
+            } catch (err) {
+                toast(err.message, 'err');
+            }
+            return;
+        }
+
+        if (e.target.closest('[data-bucket-del]')) {
+            const typed = await SY.prompt('删除存储桶', '原样输入桶名以确认：' + state.bucket, '', state.bucket);
+            if (typed === null) return;
+            try {
+                const r = await api('objects.bucket_delete', {
+                    account: state.account, bucket: state.bucket, confirm: typed.trim(),
+                });
+                toast(r.message || '桶已删除');
+                state.bucket = '';
+                state.prefix = '';
+                renderAccounts();
+                loadBuckets();
+            } catch (err) {
+                toast(err.message, 'err');
+            }
+            return;
+        }
+
+        if (e.target.closest('[data-bucket-purge]')) {
+            const typed = await SY.prompt('清空存储桶', '原样输入桶名以确认：' + state.bucket, '', state.bucket);
+            if (typed === null) return;
+            try {
+                const r = await api('objects.bucket_purge', {
+                    account: state.account, bucket: state.bucket, confirm: typed.trim(),
+                });
+                toast(r.message + (r.remaining ? '，仍有剩余，可再点一次' : ''));
+                loadObjects();
+            } catch (err) {
+                toast(err.message, 'err');
+            }
+        }
+    });
+
     renderAccounts();
 
     // 首屏加载：函数由后续任务定义；这里只负责在定义就绪后调用一次

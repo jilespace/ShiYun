@@ -124,3 +124,180 @@ function objects_account_test(): void
         'buckets' => array_slice($buckets, 0, 10),
     ]);
 }
+
+function objects_assert_mutable(int $userId, string $bucket): void
+{
+    $bound = object_bound_by($userId, $bucket);
+    if ($bound !== null) {
+        json_fail(
+            '该桶正被存储源「' . $bound . '」使用，桶内对象是本地仓的副本记录，这里只读。',
+            409,
+            'in_use'
+        );
+    }
+}
+
+function objects_buckets(): void
+{
+    $userId = require_auth_api();
+    $account = objects_account();
+    try {
+        $buckets = s3_list_buckets(object_account_config($account));
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    }
+    $bound = object_bound_buckets($userId);
+    foreach ($buckets as $i => $bucket) {
+        $buckets[$i]['bound'] = isset($bound[$bucket['name']]);
+        $buckets[$i]['boundBy'] = $bound[$bucket['name']] ?? '';
+    }
+    json_ok([
+        'buckets' => $buckets,
+        'account' => ['id' => (int) $account['id'], 'name' => (string) $account['name']],
+    ]);
+}
+
+function objects_bucket_create(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法：3–63 位，只能用小写字母、数字、- 和 .，且首尾必须是字母或数字。');
+    }
+    if ($account['provider'] === 'cos' && !object_cos_bucket_name_valid($bucket)) {
+        json_fail('COS 桶名必须带 10 位 APPID 后缀，例如 photos-1250000000。', 422, 'invalid');
+    }
+
+    try {
+        $result = s3_create_bucket(object_account_config($account), $bucket);
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    }
+    if (!$result['ok']) {
+        json_fail((string) $result['message'], 502, 's3_error');
+    }
+
+    activity_log($userId, 'object.bucket_create', null, $bucket);
+    json_ok(['bucket' => $bucket, 'message' => $result['message']]);
+}
+
+function objects_bucket_delete(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    if ((string) input('confirm', '') !== $bucket) {
+        json_fail('为避免误删，请原样输入桶名后再提交。', 422, 'confirm_required');
+    }
+    objects_assert_mutable($userId, $bucket);
+
+    try {
+        $check = s3_bucket_empty(object_account_config($account), $bucket);
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    }
+    if (!$check['empty']) {
+        json_fail('桶里还有对象。为避免误删，这里只允许删除空桶。', 409, 'not_empty');
+    }
+
+    $result = s3_delete_bucket(object_account_config($account), $bucket);
+    if (!$result['ok']) {
+        json_fail((string) $result['message'], 502, 's3_error');
+    }
+
+    activity_log($userId, 'object.bucket_delete', null, $bucket);
+    json_ok(['deleted' => true, 'message' => $result['message']]);
+}
+
+function objects_bucket_purge(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    if ((string) input('confirm', '') !== $bucket) {
+        json_fail('为避免误删，请原样输入桶名后再提交。', 422, 'confirm_required');
+    }
+    objects_assert_mutable($userId, $bucket);
+
+    try {
+        $result = s3_purge_objects(object_account_config($account), $bucket);
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    }
+    if (!$result['ok']) {
+        json_fail((string) $result['message'], 502, 's3_error');
+    }
+
+    activity_log($userId, 'object.bucket_purge', null, $bucket . '（' . (int) $result['deleted'] . ' 个对象）');
+    json_ok([
+        'deleted'   => (int) $result['deleted'],
+        'remaining' => (bool) $result['remaining'],
+        'message'   => (string) $result['message'],
+    ]);
+}
+
+function objects_bucket_bind(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    if (object_bound_by($userId, $bucket) !== null) {
+        json_fail('这个桶已经绑定过存储源了。', 409, 'exists');
+    }
+
+    $name = trim((string) input('name', ''));
+    if ($name === '' || mb_strlen($name) > 64) {
+        $name = mb_substr($bucket, 0, 64);
+    }
+
+    $config = [
+        'endpoint'   => (string) $account['endpoint'],
+        'region'     => (string) $account['region'],
+        'bucket'     => $bucket,
+        'access_key' => (string) $account['access_key'],
+        'secret_key' => (string) $account['secret_key'],
+        'prefix'     => trim((string) input('prefix', ''), '/'),
+    ];
+    if (!empty($account['session_token'])) {
+        $config['session_token'] = (string) $account['session_token'];
+    }
+
+    $id = q_insert('storage_sources', [
+        'user_id'    => $userId,
+        'name'       => $name,
+        'driver'     => 's3',
+        'config'     => json_encode($config, JSON_UNESCAPED_UNICODE),
+        'is_default' => 0,
+        'priority'   => (int) q_val(
+            'SELECT COALESCE(MAX(priority), 0) + 1 FROM storage_sources WHERE user_id = ?',
+            [$userId]
+        ),
+        'status'     => 'ok',
+        'created_at' => now(),
+    ]);
+
+    activity_log($userId, 'object.bucket_bind', null, $name . '（' . $bucket . '）');
+    json_ok(['id' => $id, 'name' => $name]);
+}
