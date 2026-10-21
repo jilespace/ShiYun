@@ -1773,6 +1773,10 @@ Create `assets/js/objects.js`:
         state.account = Number(el.select.value) || 0;
         state.bucket = '';
         state.prefix = '';
+        state.query = '';
+        state.cursor = '';
+        state.history = [];
+        if (el.search) el.search.value = '';
         renderAccounts();
         if (typeof window.__objectsLoadBuckets === 'function') window.__objectsLoadBuckets();
     });
@@ -2338,6 +2342,11 @@ Also add the detail header renderer (used by later tasks):
     window.__objectsEnterBucket = function () {
         el.bucketView.hidden = true;
         el.detailView.hidden = false;
+        // 进桶必须清掉上一个桶的搜索状态，否则新桶会直接以旧搜索词进入递归模式
+        state.query = '';
+        state.cursor = '';
+        state.history = [];
+        if (el.search) el.search.value = '';
         renderDetailHead();
         updateQuery();
         if (typeof window.__objectsLoadObjects === 'function') window.__objectsLoadObjects();
@@ -2345,6 +2354,10 @@ Also add the detail header renderer (used by later tasks):
     $('[data-detail-back]')?.addEventListener('click', () => {
         state.bucket = '';
         state.prefix = '';
+        state.query = '';
+        state.cursor = '';
+        state.history = [];
+        if (el.search) el.search.value = '';
         state.selected.clear();
         renderAccounts();
         loadBuckets();

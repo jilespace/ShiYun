@@ -363,6 +363,12 @@ check(str_contains($module, 'function objects_list'), '对象列表接口存在'
 $js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
 check(str_contains($js, 'objects.list'), '前端请求对象列表');
 check(str_contains($js, 'data-obj-check'), '对象行有复选框');
+// 回归：进入桶时必须清掉上一个桶遗留的搜索词，否则新桶会带着旧 q 进入递归搜索。
+$enterPos = strpos($js, 'window.__objectsEnterBucket = function () {');
+check(
+    $enterPos !== false && str_contains(substr($js, $enterPos, 240), "state.query = ''"),
+    '进入桶时重置搜索状态'
+);
 
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);

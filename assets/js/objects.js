@@ -194,6 +194,10 @@
         state.account = Number(el.select.value) || 0;
         state.bucket = '';
         state.prefix = '';
+        state.query = '';
+        state.cursor = '';
+        state.history = [];
+        if (el.search) el.search.value = '';
         renderAccounts();
         if (typeof window.__objectsLoadBuckets === 'function') window.__objectsLoadBuckets();
     });
@@ -296,6 +300,11 @@
                 + '<button class="chipbtn chipbtn--danger" type="button" data-bucket-del>删除桶</button>';
     }
     window.__objectsEnterBucket = function () {
+        // 进入桶时清掉上一个桶遗留的搜索/分页状态，否则旧关键字会被带进新桶。
+        state.query = '';
+        state.cursor = '';
+        state.history = [];
+        if (el.search) el.search.value = '';
         el.bucketView.hidden = true;
         el.detailView.hidden = false;
         renderDetailHead();
@@ -305,6 +314,10 @@
     $('[data-detail-back]')?.addEventListener('click', () => {
         state.bucket = '';
         state.prefix = '';
+        state.query = '';
+        state.cursor = '';
+        state.history = [];
+        if (el.search) el.search.value = '';
         state.selected.clear();
         renderAccounts();
         loadBuckets();
