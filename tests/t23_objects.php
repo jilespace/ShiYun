@@ -92,6 +92,12 @@ check(object_bound_by($uid, 'photos-1250000000') === '照片桶', '已绑定桶�
 check(object_bound_by($uid, 'other-1250000000') === null, '未绑定桶返回 null');
 check(object_bound_by($otherId, 'photos-1250000000') === null, '别的用户看不到该绑定');
 
+echo "\n· CSP\n";
+$csp = csp_content(['https://cos.ap-guangzhou.myqcloud.com']);
+check(str_contains($csp, "connect-src 'self' https://cos.ap-guangzhou.myqcloud.com;"), 'CSP 追加对象存储来源');
+check(str_contains($csp, "script-src 'self' 'nonce-"), 'CSP 仍带脚本 nonce');
+check(str_contains(csp_content(), "connect-src 'self';"), '无额外来源时 connect-src 仍只有 self');
+
 object_account_delete($uid, $id);
 check(object_account_get($uid, $id) === null, '删除账号');
 

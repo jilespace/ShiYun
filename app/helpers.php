@@ -52,6 +52,37 @@ function csp_nonce(): string
     return $nonce;
 }
 
+/**
+ * 生成 CSP。页面默认只允许连接本站；对象存储页渲染前会把当前账号的
+ * endpoint 作为 $extraConnect 传进来，因为浏览器直传 COS 走的是 fetch/XHR。
+ *
+ * @param list<string> $extraConnect
+ */
+function csp_content(array $extraConnect = []): string
+{
+    $connect = ["'self'"];
+    foreach ($extraConnect as $origin) {
+        $origin = trim((string) $origin);
+        if ($origin !== '') {
+            $connect[] = $origin;
+        }
+    }
+    $connect = array_values(array_unique($connect));
+
+    return "default-src 'self'; "
+        . "base-uri 'self'; "
+        . "object-src 'none'; "
+        . "frame-ancestors 'self'; "
+        . "form-action 'self'; "
+        . "img-src 'self' data: blob:; "
+        . "media-src 'self' blob:; "
+        . "frame-src 'self'; "
+        . "font-src 'self' https://cdn.jsdelivr.net; "
+        . "style-src 'self' 'unsafe-inline'; "
+        . "connect-src " . implode(' ', $connect) . "; "
+        . "script-src 'self' 'nonce-" . csp_nonce() . "'";
+}
+
 /** 拼接内部路由 URL */
 function url(string $route = '', array $params = []): string
 {

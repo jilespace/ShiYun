@@ -35,21 +35,7 @@ if (!headers_sent()) {
      * 字体走 jsdelivr CDN（见 assets/css/app.css 的 @font-face），必须显式放行。
      * img/media 只放本站：预览与分享的媒体都走 preview.* / shares.*，不经外部域名。
      */
-    header(
-        "Content-Security-Policy: "
-        . "default-src 'self'; "
-        . "base-uri 'self'; "
-        . "object-src 'none'; "
-        . "frame-ancestors 'self'; "
-        . "form-action 'self'; "
-        . "img-src 'self' data: blob:; "
-        . "media-src 'self' blob:; "
-        . "frame-src 'self'; "
-        . "font-src 'self' https://cdn.jsdelivr.net; "
-        . "style-src 'self' 'unsafe-inline'; "
-        . "connect-src 'self'; "
-        . "script-src 'self' 'nonce-" . csp_nonce() . "'"
-    );
+    header('Content-Security-Policy: ' . csp_content());
 }
 require BASE_PATH . '/app/icons.php';
 require BASE_PATH . '/app/schema.php';
