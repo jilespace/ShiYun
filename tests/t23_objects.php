@@ -101,6 +101,120 @@ check(str_contains(csp_content(), "connect-src 'self';"), '无额外来源时 co
 object_account_delete($uid, $id);
 check(object_account_get($uid, $id) === null, '删除账号');
 
+/* ------------------------------------------------------------ 启动存根 */
+
+$logFile = (string) tempnam(sys_get_temp_dir(), 'stub-s3-');
+@unlink($logFile);
+
+// 让内核分配一个空闲端口，再立刻释放给 php -S 用
+$probe = stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr);
+if ($probe === false) {
+    check(false, '无法分配测试端口：' . $errstr);
+    finish();
+}
+$port = (int) explode(':', (string) stream_socket_get_name($probe, false))[1];
+fclose($probe);
+
+// 子进程的 stdout/stderr 必须重定向到文件而不是管道：
+// php -S 每个请求都会往 stderr 写一行访问日志，用管道又没人读，
+// 缓冲区写满后服务进程会阻塞在 write 上，后续请求全部拿不到响应。
+$serverLog = (string) tempnam(sys_get_temp_dir(), 'stub-s3-srv-');
+$descriptors = [
+    0 => ['file', '/dev/null', 'r'],
+    1 => ['file', $serverLog, 'a'],
+    2 => ['file', $serverLog, 'a'],
+];
+$proc = proc_open(
+    sprintf('%s -S 127.0.0.1:%d %s', PHP_BINARY, $port, escapeshellarg(__DIR__ . '/stub_s3.php')),
+    $descriptors,
+    $pipes,
+    null,
+    ['STUB_S3_LOG' => $logFile, 'STUB_S3_SERVICE_HOST' => 'localhost'] + $_ENV
+);
+if (!is_resource($proc)) {
+    check(false, '无法启动 S3 存根服务');
+    finish();
+}
+
+register_shutdown_function(static function () use ($proc, $serverLog): void {
+    if (is_resource($proc)) {
+        proc_terminate($proc);
+        proc_close($proc);
+    }
+    @unlink($serverLog);
+});
+
+// 等端口就绪
+$ready = false;
+for ($i = 0; $i < 60; $i++) {
+    $conn = @stream_socket_client('tcp://127.0.0.1:' . $port, $e1, $e2, 0.3);
+    if ($conn !== false) {
+        fclose($conn);
+        $ready = true;
+        break;
+    }
+    usleep(100000);
+}
+check($ready, 'S3 存根服务已就绪（端口 ' . $port . '）');
+if (!$ready) {
+    finish();
+}
+
+/** 读取存根记录的请求；$index 为倒数第几个（0 = 最近一条） */
+$requests = static function (int $index = 0) use ($logFile): ?array {
+    $lines = is_file($logFile) ? (array) file($logFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) : [];
+    if ($lines === []) {
+        return null;
+    }
+    $line = $lines[count($lines) - 1 - $index] ?? null;
+    return $line === null ? null : (json_decode($line, true) ?: null);
+};
+
+/* ------------------------------------------------------------ 协议层 */
+
+$base = 'http://localhost:' . $port;
+$cfg = [
+    'endpoint' => $base, 'region' => 'ap-guangzhou', 'bucket' => 'photos-1250000000',
+    'access_key' => 'AKIDEXAMPLE', 'secret_key' => 'SECRETEXAMPLE', 'prefix' => '',
+];
+
+echo "\n· 签名头\n";
+s3_request($cfg, 'PUT', 'target.txt', [
+    'headers' => ['x-amz-copy-source' => '/photos-1250000000/a b+c.jpg'],
+    'payload_hash' => hash('sha256', ''),
+]);
+$req = $requests(0);
+$headers = array_change_key_case((array) ($req['headers'] ?? []), CASE_LOWER);
+check(isset($headers['x-amz-copy-source']), '额外头出现在请求里');
+check(str_contains((string) ($req['authHeader'] ?? ''), 'x-amz-copy-source'), '额外头参与签名');
+
+echo "\n· STS 预签名\n";
+$url = s3_presign($cfg + ['session_token' => 'TOKEN+WITH/SLASH'], 'GET', 'a.txt', 300);
+check(str_contains($url, 'X-Amz-Security-Token=TOKEN%2BWITH%2FSLASH'), '临时令牌进入预签名查询串');
+
+$signed = s3_presign($cfg, 'PUT', 'a.txt', 300, [], [
+    'content-type' => 'text/plain',
+    'x-amz-storage-class' => 'STANDARD_IA',
+]);
+check(str_contains($signed, 'X-Amz-SignedHeaders=content-type%3Bhost%3Bx-amz-storage-class'),
+    '预签名把额外头纳入签名');
+
+echo "\n· ListObjectsV2\n";
+$page = s3_list_objects_page($cfg, 'photos-1250000000', ['prefix' => 'photos/', 'delimiter' => '/']);
+check(count($page['folders']) === 1 && $page['folders'][0]['name'] === '2026', '解析 CommonPrefixes');
+check(count($page['objects']) === 2, '解析两个对象');
+check($page['objects'][0]['name'] === 'a b+c.jpg', '对象名去掉前缀并保留空格与加号');
+check($page['objects'][0]['etag'] === '"etag-a"', '解析 ETag');
+check($page['objects'][1]['storage_class'] === 'STANDARD_IA', '解析存储类型');
+check($page['truncated'] === true && $page['next_token'] === 'page-2', '解析分页游标');
+
+$req = $requests(0);
+check(str_contains((string) ($req['uri'] ?? ''), 'prefix=photos%2F'), '请求带 prefix');
+check(str_contains((string) ($req['uri'] ?? ''), 'delimiter=%2F'), '请求带 delimiter');
+
+$page2 = s3_list_objects_page($cfg, 'photos-1250000000', ['prefix' => 'photos/', 'continuation_token' => 'page-2']);
+check($page2['truncated'] === false && $page2['objects'] === [], '第二页返回空且未截断');
+
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
 q_exec('DELETE FROM user_settings WHERE user_id IN (?, ?)', [$uid, $otherId]);

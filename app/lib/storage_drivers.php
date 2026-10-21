@@ -474,11 +474,20 @@ function s3_request(array $c, string $method, string $key, array $opts = []): ar
     $dateStamp = gmdate('Ymd');
     $payloadHash = $opts['payload_hash'] ?? hash('sha256', (string) ($opts['body'] ?? ''));
 
-    $headers = [
-        'host'                 => $hostHeader,
-        'x-amz-content-sha256' => $payloadHash,
-        'x-amz-date'           => $amzDate,
-    ];
+    $headers = [];
+    foreach ((array) ($opts['headers'] ?? []) as $hk => $hv) {
+        $hk = strtolower(trim((string) $hk));
+        if ($hk === '' || in_array($hk, [
+            'host', 'authorization', 'content-length', 'expect',
+            'x-amz-date', 'x-amz-content-sha256', 'x-amz-security-token',
+        ], true)) {
+            continue;
+        }
+        $headers[$hk] = trim((string) $hv);
+    }
+    $headers['host']                 = $hostHeader;
+    $headers['x-amz-content-sha256'] = $payloadHash;
+    $headers['x-amz-date']           = $amzDate;
     if (!empty($c['session_token'])) {
         $headers['x-amz-security-token'] = (string) $c['session_token'];
     }
@@ -609,7 +618,7 @@ function s3_request(array $c, string $method, string $key, array $opts = []): ar
  * 生成预签名 URL（SigV4 查询串签名，与 s3_request 的请求头签名是两套算法）。
  * 使用虚拟主机风格寻址：桶名进 host。
  */
-function s3_presign(array $c, string $method, string $key, int $ttl, array $query = []): string
+function s3_presign(array $c, string $method, string $key, int $ttl, array $query = [], array $extraHeaders = []): string
 {
     $region = (string) ($c['region'] ?? 'us-east-1');
     $prefix = trim((string) ($c['prefix'] ?? ''), '/');
@@ -625,13 +634,32 @@ function s3_presign(array $c, string $method, string $key, int $ttl, array $quer
     $dateStamp = gmdate('Ymd');
     $scope = $dateStamp . '/' . $region . '/s3/aws4_request';
 
+    // 参与签名的请求头：host 必选；额外头用于 content-type / x-amz-storage-class
+    $signedMap = ['host' => $hostHeader];
+    foreach ($extraHeaders as $hk => $hv) {
+        $hk = strtolower(trim((string) $hk));
+        if ($hk === '' || $hk === 'host') {
+            continue;
+        }
+        $signedMap[$hk] = trim((string) $hv);
+    }
+    ksort($signedMap);
+    $signedHeaders = implode(';', array_keys($signedMap));
+    $canonicalHeaders = '';
+    foreach ($signedMap as $hk => $hv) {
+        $canonicalHeaders .= $hk . ':' . $hv . "\n";
+    }
+
     $params = $query + [
         'X-Amz-Algorithm'     => 'AWS4-HMAC-SHA256',
         'X-Amz-Credential'    => (string) $c['access_key'] . '/' . $scope,
         'X-Amz-Date'          => $amzDate,
         'X-Amz-Expires'       => (string) $ttl,
-        'X-Amz-SignedHeaders' => 'host',
+        'X-Amz-SignedHeaders' => $signedHeaders,
     ];
+    if (!empty($c['session_token'])) {
+        $params['X-Amz-Security-Token'] = (string) $c['session_token'];
+    }
     ksort($params);
 
     $pairs = [];
@@ -644,8 +672,8 @@ function s3_presign(array $c, string $method, string $key, int $ttl, array $quer
         $method,
         parse_url($url, PHP_URL_PATH) ?: '/',
         $canonicalQuery,
-        'host:' . $hostHeader . "\n",
-        'host',
+        $canonicalHeaders,
+        $signedHeaders,
         'UNSIGNED-PAYLOAD',
     ]);
 
@@ -663,6 +691,29 @@ function s3_presign(array $c, string $method, string $key, int $ttl, array $quer
     $signature = hash_hmac('sha256', $stringToSign, $kSigning);
 
     return $url . '?' . $canonicalQuery . '&X-Amz-Signature=' . $signature;
+}
+
+function s3_presign_url(
+    array $config,
+    string $method,
+    string $key,
+    int $ttl,
+    array $query = [],
+    array $extraHeaders = []
+): string {
+    return s3_presign($config, $method, $key, max(60, min(3600, $ttl)), $query, $extraHeaders);
+}
+
+/** 对象键 → URL 路径段；保留 / 作为分隔符 */
+function s3_encode_key(string $key): string
+{
+    return str_replace('%2F', '/', rawurlencode($key));
+}
+
+/** CopyObject 的 x-amz-copy-source 值 */
+function s3_copy_source(string $bucket, string $key): string
+{
+    return '/' . $bucket . '/' . s3_encode_key($key);
 }
 
 /* ------------------------------------------------------------ 推送到外部源 */
@@ -1111,6 +1162,96 @@ function s3_list_objects(array $config, string $bucket, int $limit = 200): array
         'count'     => count($objects),
         'truncated' => str_contains((string) $res['body'], '<IsTruncated>true</IsTruncated>'),
     ];
+}
+
+/** 解析 ListObjectsV2（含 CommonPrefixes / 分页 / ETag / 存储类型） */
+function s3_parse_object_page(string $xml, string $prefix = ''): array
+{
+    $out = ['folders' => [], 'objects' => [], 'truncated' => false, 'next_token' => '', 'key_count' => 0];
+    if ($xml === '' || !class_exists('DOMDocument')) {
+        return $out;
+    }
+    $prev = libxml_use_internal_errors(true);
+    $doc = new DOMDocument();
+    $ok = $doc->loadXML($xml, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+    libxml_clear_errors();
+    libxml_use_internal_errors($prev);
+    if (!$ok || $doc->documentElement === null) {
+        return $out;
+    }
+
+    foreach ($doc->documentElement->childNodes as $node) {
+        if (!$node instanceof DOMElement) {
+            continue;
+        }
+        if ($node->nodeName === 'IsTruncated') {
+            $out['truncated'] = strtolower(trim($node->textContent)) === 'true';
+        } elseif ($node->nodeName === 'NextContinuationToken') {
+            $out['next_token'] = trim($node->textContent);
+        } elseif ($node->nodeName === 'KeyCount') {
+            $out['key_count'] = (int) $node->textContent;
+        } elseif ($node->nodeName === 'CommonPrefixes') {
+            foreach ($node->childNodes as $child) {
+                if ($child instanceof DOMElement && $child->nodeName === 'Prefix') {
+                    $full = $child->textContent;
+                    $name = ($prefix !== '' && str_starts_with($full, $prefix))
+                        ? substr($full, strlen($prefix)) : $full;
+                    $out['folders'][] = ['prefix' => $full, 'name' => rtrim($name, '/')];
+                }
+            }
+        } elseif ($node->nodeName === 'Contents') {
+            $row = ['key' => '', 'name' => '', 'size' => 0, 'etag' => '', 'modified' => '', 'storage_class' => ''];
+            foreach ($node->childNodes as $child) {
+                if (!$child instanceof DOMElement) {
+                    continue;
+                }
+                switch ($child->nodeName) {
+                    case 'Key': $row['key'] = $child->textContent; break;
+                    case 'Size': $row['size'] = (int) $child->textContent; break;
+                    case 'ETag': $row['etag'] = trim($child->textContent); break;
+                    case 'LastModified': $row['modified'] = trim($child->textContent); break;
+                    case 'StorageClass': $row['storage_class'] = trim($child->textContent); break;
+                }
+            }
+            if ($row['key'] !== '') {
+                $row['name'] = ($prefix !== '' && str_starts_with($row['key'], $prefix))
+                    ? substr($row['key'], strlen($prefix)) : $row['key'];
+                $out['objects'][] = $row;
+            }
+        }
+    }
+    return $out;
+}
+
+/** ListObjectsV2 分页读取 */
+function s3_list_objects_page(array $config, string $bucket, array $opts = []): array
+{
+    $prefix = (string) ($opts['prefix'] ?? '');
+    $delimiter = (string) ($opts['delimiter'] ?? '/');
+    $maxKeys = max(1, min(1000, (int) ($opts['max_keys'] ?? 100)));
+
+    $query = ['list-type' => '2', 'max-keys' => (string) $maxKeys];
+    if ($prefix !== '') {
+        $query['prefix'] = $prefix;
+    }
+    if ($delimiter !== '') {
+        $query['delimiter'] = $delimiter;
+    }
+    if (!empty($opts['continuation_token'])) {
+        $query['continuation-token'] = (string) $opts['continuation_token'];
+    }
+    if (!empty($opts['start_after'])) {
+        $query['start-after'] = (string) $opts['start_after'];
+    }
+
+    $res = s3_request(s3_bucket_config($config, $bucket), 'GET', '', [
+        'query'        => $query,
+        'payload_hash' => hash('sha256', ''),
+    ]);
+    if ($res['status'] < 200 || $res['status'] >= 300) {
+        throw new RuntimeException(s3_error_message($res, '读取桶内对象失败'));
+    }
+    return s3_parse_object_page((string) $res['body'], $prefix);
 }
 
 /** 删除桶内单个对象；404 视为已不存在 */

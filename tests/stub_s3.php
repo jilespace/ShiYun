@@ -21,6 +21,9 @@ file_put_contents($logFile, json_encode([
     'uri'     => $uri,
     'host'    => $host,
     'auth'    => isset($_SERVER['HTTP_AUTHORIZATION']) ? 'present' : '',
+    'headers' => function_exists('getallheaders') ? getallheaders() : [],
+    // 保留 auth 字段供 t16 断言；另存原始 Authorization 供新测试检查签名头
+    'authHeader' => (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? ''),
     'amzDate' => (string) ($_SERVER['HTTP_X_AMZ_DATE'] ?? ''),
     'sha256'  => (string) ($_SERVER['HTTP_X_AMZ_CONTENT_SHA256'] ?? ''),
     'contentMd5' => (string) ($_SERVER['HTTP_CONTENT_MD5'] ?? ''),
@@ -96,6 +99,38 @@ if ($method === 'DELETE') {
 
 /* -------------------------------------------------- 桶级：列对象（判空） */
 if ($method === 'GET' && str_contains($query, 'list-type=2')) {
+    if ($bucket === 'photos-1250000000') {
+        $prefix = '';
+        $delimiter = '';
+        $cursor = '';
+        foreach (explode('&', $query) as $pair) {
+            [$k, $v] = array_pad(explode('=', $pair, 2), 2, '');
+            $v = rawurldecode($v);
+            if ($k === 'prefix') { $prefix = $v; }
+            if ($k === 'delimiter') { $delimiter = $v; }
+            if ($k === 'continuation-token') { $cursor = $v; }
+        }
+        echo '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>'
+            . '<Name>photos-1250000000</Name>'
+            . '<Prefix>' . htmlspecialchars($prefix, ENT_XML1) . '</Prefix>'
+            . '<KeyCount>3</KeyCount><MaxKeys>100</MaxKeys>';
+        if ($cursor === '' && $delimiter === '/') {
+            echo '<IsTruncated>true</IsTruncated>'
+                . '<NextContinuationToken>page-2</NextContinuationToken>'
+                . '<CommonPrefixes><Prefix>' . htmlspecialchars($prefix . '2026/', ENT_XML1) . '</Prefix></CommonPrefixes>'
+                . '<Contents><Key>' . htmlspecialchars($prefix . 'a b+c.jpg', ENT_XML1) . '</Key>'
+                . '<Size>1024</Size><ETag>"etag-a"</ETag>'
+                . '<LastModified>2026-01-02T03:04:05Z</LastModified><StorageClass>STANDARD</StorageClass></Contents>'
+                . '<Contents><Key>' . htmlspecialchars($prefix . 'notes.txt', ENT_XML1) . '</Key>'
+                . '<Size>15</Size><ETag>"etag-n"</ETag>'
+                . '<LastModified>2026-01-03T03:04:05Z</LastModified><StorageClass>STANDARD_IA</StorageClass></Contents>';
+        } else {
+            echo '<IsTruncated>false</IsTruncated>';
+        }
+        echo '</ListBucketResult>';
+        exit;
+    }
+
     echo '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><IsTruncated>false</IsTruncated>';
     if ($bucket === 'full-bucket') {
         echo '<Contents><Key>0a/abcdef</Key><Size>12</Size></Contents>';
