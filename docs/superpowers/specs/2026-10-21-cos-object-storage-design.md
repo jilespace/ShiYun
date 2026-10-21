@@ -307,7 +307,7 @@ $opts = [
 
 - `s3_head_object($config, $bucket, $key): ?array`：返回 `size`、`content_type`、`etag`、`last_modified`、`storage_class`、`restore`（`x-amz-restore` 响应头）；404 返回 null。
 - `s3_copy_object($config, $bucket, $source, $target, ?string $storageClass = null): array`：`PUT` 目标键，带 `x-amz-copy-source`。
-- `s3_restore_object($config, $bucket, $key, int $days, string $tier = 'Standard'): array`：`POST ?restore`，body 为 `<RestoreRequest><Days>…</Days><Tier>…</Tier></RestoreRequest>`。
+- `s3_restore_object($config, $bucket, $key, int $days, string $tier = 'Standard'): array`：`POST ?restore`。`Tier` 不能放在顶层：COS 用 `<RestoreRequest><Days>…</Days><CASJobParameters><Tier>…</Tier></CASJobParameters></RestoreRequest>`，通用 S3 用 `<GlacierJobParameters>`。按 `$config['provider']`（`cos` / 其他）选择外层节点。
 - 对象键编码：
   - 请求路径沿用现有 `rawurlencode` + `%2F` 还原。
   - `x-amz-copy-source` 的值：`/` . 桶名 . `/` . 按路径段编码的键。

@@ -303,6 +303,7 @@ function object_account_get(int $userId, int $id): ?array
 function object_account_config(array $row): array
 {
     return [
+        'provider'      => (string) ($row['provider'] ?? 's3'),
         'endpoint'      => (string) ($row['endpoint'] ?? ''),
         'region'        => (string) ($row['region'] ?? ''),
         'access_key'    => (string) ($row['access_key'] ?? ''),
@@ -1048,10 +1049,17 @@ $req = $requests(0);
 $headers = array_change_key_case((array) ($req['headers'] ?? []), CASE_LOWER);
 check(($headers['x-amz-copy-source'] ?? '') === '/photos-1250000000/a%20b%2Bc.jpg', '复制源键按路径段编码');
 
-$restore = s3_restore_object($cfg, 'photos-1250000000', 'cold.bin', 2);
+$restore = s3_restore_object($cfg + ['provider' => 'cos'], 'photos-1250000000', 'cold.bin', 2);
 check($restore['ok'] === true, '解冻返回成功');
 $req = $requests(0);
 check(str_contains((string) ($req['body'] ?? ''), '<Days>2</Days>'), '解冻请求体带天数');
+check(str_contains((string) ($req['body'] ?? ''), '<CASJobParameters><Tier>Standard</Tier></CASJobParameters>'),
+    'COS 解冻把 Tier 放进 CASJobParameters');
+$restoreS3 = s3_restore_object($cfg + ['provider' => 's3'], 'photos-1250000000', 'cold.bin', 2);
+$req = $requests(0);
+check($restoreS3['ok'] === true
+    && str_contains((string) ($req['body'] ?? ''), '<GlacierJobParameters><Tier>Standard</Tier></GlacierJobParameters>'),
+    '通用 S3 解冻把 Tier 放进 GlacierJobParameters');
 
 $version = s3_get_subresource($cfg, 'photos-1250000000', 'versioning');
 check(in_array($version['status'], [200, 404], true), '子资源 GET 返回状态码');
@@ -1163,7 +1171,10 @@ function s3_restore_object(array $config, string $bucket, string $key, int $days
 {
     $days = max(1, min(30, $days));
     $tier = in_array($tier, ['Standard', 'Bulk', 'Expedited'], true) ? $tier : 'Standard';
-    $xml = '<RestoreRequest><Days>' . $days . '</Days><Tier>' . $tier . '</Tier></RestoreRequest>';
+    // Tier 不能放在顶层：COS 用 CASJobParameters，通用 S3 用 GlacierJobParameters
+    $wrapper = ((string) ($config['provider'] ?? 's3')) === 'cos' ? 'CASJobParameters' : 'GlacierJobParameters';
+    $xml = '<RestoreRequest><Days>' . $days . '</Days><' . $wrapper . '><Tier>'
+        . $tier . '</Tier></' . $wrapper . '></RestoreRequest>';
     $res = s3_request(s3_bucket_config($config, $bucket), 'POST', $key, [
         'query'        => ['restore' => ''],
         'body'         => $xml,
@@ -1607,6 +1618,10 @@ Create `assets/js/objects.js`:
     };
     if (!state.account && state.accounts.length) state.account = Number(state.accounts[0].id);
     if (!state.accounts.length) state.bucket = '';
+    // URL 里可能残留已删除账号的 id；对齐到第一个可用账号，否则编辑/测试会失效
+    if (state.account && !state.accounts.some((a) => Number(a.id) === Number(state.account))) {
+        state.account = state.accounts.length ? Number(state.accounts[0].id) : 0;
+    }
 
     const el = {
         select: $('[data-account-select]'),
@@ -1887,7 +1902,7 @@ Append to `assets/css/console.css`:
 }
 
 .objcard:hover {
-    border-color: var(--accent);
+    border-color: var(--signal);
     transform: translateY(-1px);
 }
 
@@ -1909,7 +1924,7 @@ Append to `assets/css/console.css`:
 }
 
 .objrow__folder {
-    color: var(--accent);
+    color: var(--signal);
 }
 
 .objsort {
@@ -1922,13 +1937,13 @@ Append to `assets/css/console.css`:
 }
 
 .objsort:hover {
-    color: var(--accent);
+    color: var(--signal);
 }
 
 .objrow__check {
     width: 16px;
     height: 16px;
-    accent-color: var(--accent);
+    accent-color: var(--signal);
 }
 
 .objsettings {
