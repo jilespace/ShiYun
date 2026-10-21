@@ -239,9 +239,22 @@ if ($method === 'GET' && str_contains($query, 'list-type=2')) {
 /* ------------------------------------------------ 桶级：批量删除对象 */
 if ($method === 'POST' && str_contains($query, 'delete')) {
     $body = (string) (file_get_contents('php://input') ?: '');
-    $count = substr_count($body, '<Object>');
-    echo '<?xml version="1.0" encoding="UTF-8"?><DeleteResult><Deleted>'
-        . str_repeat('<Key>stub</Key>', $count) . '</Deleted></DeleteResult>';
+    $keys = [];
+    if (preg_match_all('#<Object><Key>(.*?)</Key></Object>#s', $body, $m) > 0) {
+        $keys = array_map(
+            static fn (string $k): string => html_entity_decode($k, ENT_QUOTES | ENT_XML1, 'UTF-8'),
+            $m[1]
+        );
+    }
+    $out = '<?xml version="1.0" encoding="UTF-8"?><DeleteResult>';
+    foreach ($keys as $key) {
+        if ($key === 'fail.txt') {
+            $out .= '<Error><Key>fail.txt</Key><Code>AccessDenied</Code></Error>';
+        } else {
+            $out .= '<Deleted><Key>' . htmlspecialchars($key, ENT_QUOTES | ENT_XML1, 'UTF-8') . '</Key></Deleted>';
+        }
+    }
+    echo $out . '</DeleteResult>';
     exit;
 }
 

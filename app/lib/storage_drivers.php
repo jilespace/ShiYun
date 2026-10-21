@@ -1324,10 +1324,58 @@ function s3_delete_objects(array $config, string $bucket, array $keys): array
     ]);
 
     if ($res['status'] < 200 || $res['status'] >= 300) {
-        return ['ok' => false, 'deleted' => 0, 'message' => s3_error_message($res, '批量删除失败')];
+        return [
+            'ok' => false, 'deleted' => 0, 'failed' => 0, 'errors' => [],
+            'message' => s3_error_message($res, '批量删除失败'),
+        ];
     }
 
-    return ['ok' => true, 'deleted' => count($keys), 'message' => '已删除 ' . count($keys) . ' 个对象。'];
+    // DeleteObjects 即使在 200 里也会逐键返回 <Deleted>/<Error>，不能只看 HTTP 状态
+    $deleted = 0;
+    $errors = [];
+    $prev = libxml_use_internal_errors(true);
+    $doc = new DOMDocument();
+    $loaded = $doc->loadXML((string) $res['body'], LIBXML_NONET);
+    libxml_clear_errors();
+    libxml_use_internal_errors($prev);
+    if ($loaded && $doc->documentElement !== null) {
+        foreach ($doc->documentElement->childNodes as $node) {
+            if (!$node instanceof DOMElement) {
+                continue;
+            }
+            if ($node->nodeName === 'Deleted') {
+                $deleted++;
+            } elseif ($node->nodeName === 'Error') {
+                $key = '';
+                $code = '';
+                foreach ($node->childNodes as $child) {
+                    if (!$child instanceof DOMElement) {
+                        continue;
+                    }
+                    if ($child->nodeName === 'Key') {
+                        $key = $child->textContent;
+                    } elseif ($child->nodeName === 'Code') {
+                        $code = $child->textContent;
+                    }
+                }
+                $errors[] = ['key' => $key, 'code' => $code];
+            }
+        }
+    }
+
+    // 个别实现不返回可解析的 DeleteResult：退回按请求数计成功，避免误报失败
+    if ($deleted === 0 && $errors === []) {
+        $deleted = count($keys);
+    }
+
+    $failed = count($errors);
+    return [
+        'ok'      => $failed === 0,
+        'deleted' => $deleted,
+        'failed'  => $failed,
+        'errors'  => $errors,
+        'message' => '已删除 ' . $deleted . ' 个对象' . ($failed > 0 ? '，' . $failed . ' 个失败' : '') . '。',
+    ];
 }
 
 /**

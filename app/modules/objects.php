@@ -772,7 +772,7 @@ function objects_mkdir(): void
 
     $prefix = (string) input('prefix', '');
     $name = trim((string) input('name', ''));
-    if ($name === '' || mb_strlen($name) > 255 || preg_match('/[\x00-\x1F\x7F]/', $name)) {
+    if ($name === '' || strlen($name) > 255 || preg_match('/[\x00-\x1F\x7F]/', $name)) {
         json_fail('文件夹名称不合法。');
     }
     $key = object_key_join($prefix, $name) . '/';

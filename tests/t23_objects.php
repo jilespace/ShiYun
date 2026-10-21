@@ -415,6 +415,12 @@ $js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
 check(str_contains($js, 'objects.copy'), '前端调用复制');
 check(str_contains($js, 'objects.delete'), '前端调用批量删除');
 check(str_contains($js, 'data-obj-delete-selected'), '前端有删除所选');
+check(str_contains($module, 'strlen($name) > 255'), '文件夹名按字节数限制');
+
+$delResult = s3_delete_objects($cfg, 'photos-1250000000', ['ok.txt', 'fail.txt']);
+check($delResult['deleted'] === 1 && $delResult['failed'] === 1, '批量删除解析逐键结果');
+check($delResult['errors'][0]['key'] === 'fail.txt', '批量删除保留失败键');
+check($delResult['ok'] === false, '有失败键时 ok 为 false');
 
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
