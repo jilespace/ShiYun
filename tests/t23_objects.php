@@ -422,6 +422,15 @@ check($delResult['deleted'] === 1 && $delResult['failed'] === 1, '批量删除�
 check($delResult['errors'][0]['key'] === 'fail.txt', '批量删除保留失败键');
 check($delResult['ok'] === false, '有失败键时 ok 为 false');
 
+echo "\n· 设置与统计\n";
+$module = (string) file_get_contents(BASE_PATH . '/app/modules/objects.php');
+check(str_contains($module, 'function objects_settings'), '设置读取接口存在');
+check(str_contains($module, 'function objects_setting_save'), '设置保存接口存在');
+check(str_contains($module, 'function objects_stat'), '统计接口存在');
+$js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
+check(str_contains($js, 'objects.settings'), '前端读取设置');
+check(str_contains($js, "data-tab=\"settings\"") || str_contains($js, 'data-tab-panel'), '前端有设置页签');
+
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
 q_exec('DELETE FROM user_settings WHERE user_id IN (?, ?)', [$uid, $otherId]);

@@ -792,3 +792,215 @@ function objects_mkdir(): void
     activity_log($userId, 'object.mkdir', null, $bucket . ' / ' . mb_substr($key, 0, 120));
     json_ok(['key' => $key]);
 }
+
+function objects_settings(): void
+{
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    $section = (string) input('section', 'versioning');
+    $config = object_account_config($account);
+
+    $allowed = ['versioning', 'website', 'cors', 'lifecycle', 'tagging', 'acl', 'policy'];
+    if (!in_array($section, $allowed, true)) {
+        json_fail('不支持的设置项。');
+    }
+
+    $res = s3_get_subresource($config, $bucket, $section);
+    $status = (int) $res['status'];
+    $body = (string) $res['body'];
+
+    if ($section === 'policy') {
+        if ($status === 404) {
+            json_ok(['section' => $section, 'exists' => false, 'json' => null, 'raw' => '']);
+        }
+        if ($status < 200 || $status >= 300) {
+            json_fail(s3_error_message($res, '读取桶策略失败'), 502, 's3_error');
+        }
+        $decoded = json_decode($body, true);
+        json_ok(['section' => $section, 'exists' => true, 'json' => $decoded, 'raw' => $body]);
+    }
+
+    if ($status === 404) {
+        json_ok([
+            'section' => $section,
+            'exists'  => false,
+            'raw'     => '',
+            'value'   => match ($section) {
+                'versioning' => '',
+                'website'    => ['enabled' => false, 'index' => '', 'error' => ''],
+                'cors'       => ['rules' => []],
+                'lifecycle'  => ['rules' => []],
+                'tagging'    => ['tags' => []],
+                'acl'        => ['canned' => 'private', 'grants' => []],
+            },
+        ]);
+    }
+    if ($status < 200 || $status >= 300) {
+        json_fail(s3_error_message($res, '读取设置失败'), 502, 's3_error');
+    }
+
+    $value = match ($section) {
+        'versioning' => object_versioning_parse($body),
+        'website'    => object_website_parse($body),
+        'cors'       => ['rules' => object_cors_parse($body)],
+        'lifecycle'  => ['rules' => object_lifecycle_rules_parse($body)],
+        'tagging'    => ['tags' => object_tagging_parse($body)],
+        'acl'        => object_acl_parse($body),
+    };
+
+    json_ok(['section' => $section, 'exists' => true, 'raw' => $body, 'value' => $value]);
+}
+
+function objects_setting_save(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    objects_assert_mutable($userId, $bucket);
+
+    $section = (string) input('section', '');
+    $payload = input('payload', []);
+    if (!is_array($payload)) {
+        json_fail('payload 必须是对象。');
+    }
+    $config = object_account_config($account);
+
+    try {
+        switch ($section) {
+            case 'versioning':
+                $xml = object_versioning_xml((string) ($payload['status'] ?? 'Enabled'));
+                $result = s3_put_subresource($config, $bucket, 'versioning', $xml);
+                break;
+
+            case 'website':
+                if (empty($payload['enabled'])) {
+                    $result = s3_delete_subresource($config, $bucket, 'website');
+                } else {
+                    $xml = object_website_xml((string) ($payload['index'] ?? ''), (string) ($payload['error'] ?? ''));
+                    $result = s3_put_subresource($config, $bucket, 'website', $xml);
+                }
+                break;
+
+            case 'cors':
+                $rules = $payload['rules'] ?? [];
+                if (!is_array($rules)) {
+                    json_fail('CORS 规则格式不正确。', 422, 'invalid');
+                }
+                $xml = object_cors_xml($rules);
+                $result = s3_put_subresource($config, $bucket, 'cors', $xml);
+                break;
+
+            case 'lifecycle':
+                $mode = (string) ($payload['mode'] ?? 'rules');
+                if ($mode === 'delete') {
+                    $result = s3_delete_subresource($config, $bucket, 'lifecycle');
+                    break;
+                }
+                if ($mode === 'xml') {
+                    $xml = (string) ($payload['xml'] ?? '');
+                    object_lifecycle_validate($xml);
+                } else {
+                    $rules = $payload['rules'] ?? [];
+                    if (!is_array($rules)) {
+                        json_fail('生命周期规则格式不正确。', 422, 'invalid');
+                    }
+                    $xml = object_lifecycle_xml($rules);
+                }
+                $result = s3_put_subresource($config, $bucket, 'lifecycle', $xml);
+                break;
+
+            case 'tagging':
+                $xml = object_tagging_xml(is_array($payload['tags'] ?? null) ? $payload['tags'] : []);
+                $result = s3_put_subresource($config, $bucket, 'tagging', $xml);
+                break;
+
+            case 'acl':
+                $canned = (string) ($payload['canned'] ?? 'private');
+                if (!in_array($canned, ['private', 'public-read'], true)) {
+                    json_fail('不支持的 ACL。', 422, 'invalid');
+                }
+                $res = s3_request(object_bucket_config($account, $bucket), 'PUT', '', [
+                    'query'        => ['acl' => ''],
+                    'headers'      => ['x-amz-acl' => $canned],
+                    'payload_hash' => hash('sha256', ''),
+                ]);
+                $ok = (int) $res['status'] >= 200 && (int) $res['status'] < 300;
+                $result = ['ok' => $ok, 'message' => $ok ? '已保存。' : s3_error_message($res, '保存 ACL 失败')];
+                break;
+
+            case 'policy':
+                json_fail('桶策略在本期只读。', 422, 'readonly');
+                // no break
+
+            default:
+                json_fail('不支持的设置项。');
+        }
+    } catch (InvalidArgumentException $e) {
+        json_fail($e->getMessage(), 422, 'invalid');
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    }
+
+    if (!$result['ok']) {
+        json_fail((string) $result['message'], 502, 's3_error');
+    }
+    activity_log($userId, 'object.setting_save', null, $bucket . ' / ' . $section);
+    json_ok($result);
+}
+
+function objects_stat(): void
+{
+    require_method('POST');
+    require_csrf();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+
+    $config = object_account_config($account);
+    $start = microtime(true);
+    $token = '';
+    $count = 0;
+    $bytes = 0;
+    $pages = 0;
+    $partial = true;
+
+    try {
+        do {
+            $page = s3_list_objects_page($config, $bucket, [
+                'delimiter'          => '',
+                'continuation_token' => $token,
+                'max_keys'           => 1000,
+            ]);
+            foreach ($page['objects'] as $object) {
+                $count++;
+                $bytes += (int) $object['size'];
+            }
+            $token = (string) $page['next_token'];
+            $pages++;
+            $partial = $page['truncated'];
+            if ($pages >= 20 || microtime(true) - $start >= 20) {
+                break;
+            }
+        } while ($page['truncated'] && $token !== '');
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    }
+
+    json_ok([
+        'count' => $count,
+        'bytes' => $bytes,
+        'bytesText' => format_bytes((float) $bytes),
+        'pages' => $pages,
+        'partial' => $partial,
+    ]);
+}

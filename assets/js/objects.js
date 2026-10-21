@@ -852,6 +852,253 @@
         }
     });
 
+    /* ---------------------------------------------------------- 设置 */
+
+    function settingCard(title, note, body) {
+        return '<section class="objset"><div class="objset__head"><h3>' + escapeHtml(title) + '</h3>'
+            + '<span class="panel__note">' + escapeHtml(note) + '</span></div>'
+            + '<div class="objset__body">' + body + '</div></section>';
+    }
+
+    async function loadSettings() {
+        if (!state.bucket) return;
+        el.settingsHost.innerHTML = '<div class="blank">' + icon('loader')
+            + '<p class="blank__hint">正在读取设置…</p></div>';
+        const sections = ['versioning', 'website', 'cors', 'lifecycle', 'tagging', 'acl', 'policy'];
+        const cards = [];
+        for (const section of sections) {
+            try {
+                const data = await api('objects.settings', {
+                    account: state.account, bucket: state.bucket, section: section,
+                }, { method: 'GET' });
+                cards.push(renderSetting(section, data));
+            } catch (err) {
+                cards.push(settingCard(section, '', '<p class="mwarn">'
+                    + icon('alert-triangle') + '<span>' + escapeHtml(err.message) + '</span></p>'));
+            }
+        }
+        el.settingsHost.innerHTML = cards.join('');
+    }
+    window.__objectsLoadSettings = loadSettings;
+
+    function renderSetting(section, data) {
+        const v = data.value || {};
+        if (section === 'versioning') {
+            return settingCard('版本控制', '开启后可恢复历史版本',
+                '<p class="mhint">当前：' + escapeHtml(v || '从未启用') + '</p>'
+                + '<div class="objbar__tools" style="margin-top:10px">'
+                + '<button class="chipbtn" type="button" data-set-versioning="Enabled">启用</button>'
+                + '<button class="chipbtn" type="button" data-set-versioning="Suspended">暂停</button></div>');
+        }
+        if (section === 'website') {
+            return settingCard('静态网站', '把桶当作静态站点',
+                '<label class="mfield"><span class="mfield__label">索引文档</span>'
+                + '<input class="minput" data-set="index" value="' + escapeHtml(v.index || 'index.html') + '"></label>'
+                + '<label class="mfield" style="margin-top:8px"><span class="mfield__label">错误文档</span>'
+                + '<input class="minput" data-set="error" value="' + escapeHtml(v.error || '') + '"></label>'
+                + '<button class="chipbtn" type="button" data-set-website="1" style="margin-top:10px">保存</button>'
+                + '<button class="chipbtn chipbtn--danger" type="button" data-set-website-off="1"'
+                + ' style="margin-top:10px;margin-left:8px">停用</button>');
+        }
+        if (section === 'cors') {
+            const rules = (v.rules || [])
+                .flatMap((r) => r.origins.map((origin) => origin + ', ' + r.methods.join(' ')))
+                .join('\n');
+            return settingCard('CORS', '浏览器直传需要放行本站',
+                '<textarea class="minput" data-set="cors" placeholder="每行一条：来源, GET PUT HEAD">'
+                + escapeHtml(rules) + '</textarea>'
+                + '<p class="mhint">每行格式：<code>https://example.com, GET PUT HEAD</code></p>'
+                + '<button class="chipbtn" type="button" data-set-cors="1" style="margin-top:10px">保存</button>');
+        }
+        if (section === 'lifecycle') {
+            const raw = data.raw || '';
+            return settingCard('生命周期', '按时间转存储或删除',
+                '<textarea class="minput" data-set="lifecycle">' + escapeHtml(raw) + '</textarea>'
+                + '<p class="mhint">直接编辑 LifecycleConfiguration XML；保存会整体替换现有配置。</p>'
+                + '<button class="chipbtn" type="button" data-lifecycle-preset style="margin-top:10px">生成常用规则</button>'
+                + '<button class="chipbtn" type="button" data-set-lifecycle="1" style="margin-top:10px;margin-left:8px">保存</button>'
+                + '<button class="chipbtn chipbtn--danger" type="button" data-lifecycle-delete'
+                + ' style="margin-top:10px;margin-left:8px">删除配置</button>');
+        }
+        if (section === 'tagging') {
+            const tags = (v.tags || []).map((t) => t.key + '=' + t.value).join('\n');
+            return settingCard('标签', '键值对',
+                '<textarea class="minput" data-set="tags">' + escapeHtml(tags) + '</textarea>'
+                + '<p class="mhint">每行一个 <code>key=value</code>。</p>'
+                + '<button class="chipbtn" type="button" data-set-tagging="1" style="margin-top:10px">保存</button>');
+        }
+        if (section === 'acl') {
+            const grants = (v.grants || [])
+                .map((g) => g.permission + ' · ' + (g.name || g.type))
+                .join('\n');
+            return settingCard('访问权限', '公开前请确认',
+                '<select class="select" data-set="acl">'
+                + '<option value="private"' + (v.canned === 'private' ? ' selected' : '') + '>私有</option>'
+                + '<option value="public-read"' + (v.canned === 'public-read' ? ' selected' : '') + '>公共读</option>'
+                + '</select>'
+                + '<button class="chipbtn" type="button" data-set-acl="1" style="margin-top:10px">保存</button>'
+                + '<pre class="mhint" style="white-space:pre-wrap;margin-top:10px">'
+                + escapeHtml(grants || '无额外授权') + '</pre>');
+        }
+        const json = data.json ? JSON.stringify(data.json, null, 2) : '未设置策略';
+        return settingCard('桶策略', '只读', '<pre class="mhint" style="white-space:pre-wrap">'
+            + escapeHtml(json) + '</pre>');
+    }
+
+    function escapeXml(value) {
+        return String(value).replace(/[<>&'"]/g, (c) => ({
+            '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;',
+        }[c]));
+    }
+
+    el.settingsHost.addEventListener('click', async (e) => {
+        const preset = e.target.closest('[data-lifecycle-preset]');
+        if (preset) {
+            const prefix = await SY.prompt('生命周期规则', '前缀（留空表示全部对象）', '');
+            if (prefix === null) return;
+            const transitionDays = await SY.prompt('转存储', 'N 天后转归档（0 = 不转）', '30');
+            if (transitionDays === null) return;
+            const expireDays = await SY.prompt('过期删除', 'N 天后删除（0 = 不删除）', '365');
+            if (expireDays === null) return;
+            const abortDays = await SY.prompt('清理分片', 'N 天后清理未完成分片（0 = 不清理）', '7');
+            if (abortDays === null) return;
+
+            const t = Number(transitionDays) || 0;
+            const e2 = Number(expireDays) || 0;
+            const a = Number(abortDays) || 0;
+            let body = '<ID>shiyun-lifecycle</ID>'
+                + '<Filter><Prefix>' + escapeXml(prefix) + '</Prefix></Filter><Status>Enabled</Status>';
+            if (t > 0) {
+                body += '<Transition><Days>' + t + '</Days><StorageClass>ARCHIVE</StorageClass></Transition>';
+            }
+            if (e2 > 0) body += '<Expiration><Days>' + e2 + '</Days></Expiration>';
+            if (a > 0) {
+                body += '<AbortIncompleteMultipartUpload><DaysAfterInitiation>'
+                    + a + '</DaysAfterInitiation></AbortIncompleteMultipartUpload>';
+            }
+            const xml = '<?xml version="1.0" encoding="UTF-8"?><LifecycleConfiguration><Rule>'
+                + body + '</Rule></LifecycleConfiguration>';
+            const area = preset.closest('.objset__body').querySelector('[data-set="lifecycle"]');
+            if (area) area.value = xml;
+            return;
+        }
+
+        const lifeDel = e.target.closest('[data-lifecycle-delete]');
+        if (lifeDel) {
+            const ok = await SY.confirm('删除生命周期配置', '这会移除桶上全部生命周期规则。', '删除', true);
+            if (!ok) return;
+            try {
+                await api('objects.setting_save', {
+                    account: state.account, bucket: state.bucket,
+                    section: 'lifecycle', payload: { mode: 'delete' },
+                });
+                toast('已删除生命周期配置');
+                loadSettings();
+            } catch (err) {
+                toast(err.message, 'err');
+            }
+            return;
+        }
+
+        const versioning = e.target.closest('[data-set-versioning]');
+        if (versioning) {
+            try {
+                await api('objects.setting_save', {
+                    account: state.account, bucket: state.bucket, section: 'versioning',
+                    payload: { status: versioning.dataset.setVersioning },
+                });
+                toast('已保存');
+                loadSettings();
+            } catch (err) { toast(err.message, 'err'); }
+            return;
+        }
+        const off = e.target.closest('[data-set-website-off]');
+        if (off) {
+            try {
+                await api('objects.setting_save', {
+                    account: state.account, bucket: state.bucket, section: 'website',
+                    payload: { enabled: false },
+                });
+                toast('已停用静态网站');
+                loadSettings();
+            } catch (err) {
+                toast(err.message, 'err');
+            }
+            return;
+        }
+
+        const save = e.target.closest('[data-set-website], [data-set-cors], [data-set-lifecycle], [data-set-tagging], [data-set-acl]');
+        if (!save) return;
+        const body = save.closest('.objset__body');
+        const val = (name) => body.querySelector('[data-set="' + name + '"]')?.value || '';
+        let section = '';
+        let payload = {};
+        if (save.hasAttribute('data-set-website')) {
+            section = 'website';
+            payload = { enabled: true, index: val('index'), error: val('error') };
+        } else if (save.hasAttribute('data-set-cors')) {
+            section = 'cors';
+            const rules = val('cors').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+                const [originPart, methodPart] = line.split(',');
+                return {
+                    origins: [originPart.trim()],
+                    methods: (methodPart || 'GET PUT HEAD').trim().split(/\s+/),
+                    headers: ['*'], expose: ['ETag'], max_age: 3600,
+                };
+            });
+            payload = { rules: rules };
+        } else if (save.hasAttribute('data-set-lifecycle')) {
+            section = 'lifecycle';
+            payload = { mode: 'xml', xml: val('lifecycle') };
+        } else if (save.hasAttribute('data-set-tagging')) {
+            section = 'tagging';
+            const tags = val('tags').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+                const pos = line.indexOf('=');
+                return pos === -1 ? { key: line, value: '' } : { key: line.slice(0, pos), value: line.slice(pos + 1) };
+            });
+            payload = { tags: tags };
+        } else {
+            section = 'acl';
+            const canned = val('acl');
+            if (canned === 'public-read'
+                && !(await SY.confirm('设为公共读', '桶内对象将可被任何人读取，确认继续？', '设为公共读', true))) {
+                return;
+            }
+            payload = { canned: canned };
+        }
+        try {
+            await api('objects.setting_save', {
+                account: state.account, bucket: state.bucket, section: section, payload: payload,
+            });
+            toast('已保存');
+            loadSettings();
+        } catch (err) {
+            toast(err.message, 'err');
+        }
+    });
+
+    /* 页签切换 */
+    $$('[data-tab]').forEach((tab) => tab.addEventListener('click', (e) => {
+        e.preventDefault();
+        const name = tab.dataset.tab;
+        $$('[data-tab]').forEach((t) => t.classList.toggle('is-on', t === tab));
+        $$('[data-tab-panel]').forEach((panel) => {
+            panel.toggleAttribute('hidden', panel.dataset.tabPanel !== name);
+        });
+        if (name === 'settings') loadSettings();
+    }));
+
+    /* 统计 */
+    $('[data-obj-stat]')?.addEventListener('click', async () => {
+        try {
+            const r = await api('objects.stat', { account: state.account, bucket: state.bucket });
+            toast('扫描 ' + r.pages + ' 页：' + r.count + ' 个对象，' + r.bytesText
+                + (r.partial ? '（已到上限，结果不完整）' : ''));
+        } catch (err) {
+            toast(err.message, 'err');
+        }
+    });
+
     renderAccounts();
 
     // 首屏加载：函数由后续任务定义；这里只负责在定义就绪后调用一次
