@@ -204,6 +204,28 @@ q_exec('DELETE FROM api_tokens WHERE user_id = ?', [$disabledId]);
 q_exec('DELETE FROM nodes WHERE user_id = ?', [$disabledId]);
 q_exec('DELETE FROM users WHERE id = ?', [$disabledId]);
 
+/* -------------------------------------------------- 迁移自愈 */
+
+echo "\n· 迁移自愈\n";
+// 线上出过的事故：app_meta 记着 schema_version=17，但 totp_last_step 根本没建，
+// 于是两步验证一提交就报 Unknown column。根因是「版本号够了就整体跳过迁移」的闸门，
+// 而版本号定义在 schema.php、补列语句在 db.php，两个文件不同步就会永久漏建。
+// 现在改成每次请求核对 information_schema 快照，缺什么补什么。
+q_exec('ALTER TABLE users DROP COLUMN totp_last_step');
+$colsNow = array_column(q_all('SHOW COLUMNS FROM users'), 'Field');
+check(!in_array('totp_last_step', $colsNow, true), '前置：把 totp_last_step 删掉');
+
+db_migrate(db());
+$colsNow = array_column(q_all('SHOW COLUMNS FROM users'), 'Field');
+check(in_array('totp_last_step', $colsNow, true), '即使版本号已是最新，缺失的列也会被补回来');
+
+q_exec('ALTER TABLE nodes DROP INDEX idx_node_size');
+$idxNow = array_column(q_all('SHOW INDEX FROM nodes'), 'Key_name');
+check(!in_array('idx_node_size', $idxNow, true), '前置：把 idx_node_size 删掉');
+db_migrate(db());
+$idxNow = array_column(q_all('SHOW INDEX FROM nodes'), 'Key_name');
+check(in_array('idx_node_size', $idxNow, true), '缺失的索引同样会被补回来');
+
 /* -------------------------------------------------- M12 静态检查 */
 
 echo "\n· 结构检查\n";

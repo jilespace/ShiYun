@@ -8,7 +8,11 @@ if (!defined('BASE_PATH')) {
 }
 
 /**
- * 数据库结构定义。改结构时把 SCHEMA_VERSION 加一，下次请求会自动补建。
+ * 数据库结构定义。改结构时把 SCHEMA_VERSION 加一。
+ *
+ * 注意：这个号只供人查看（写进 app_meta.schema_version），**不是迁移的闸门**。
+ * 「缺了什么就补什么」的判定在 db.php 的 db_migrate() 里，靠每次请求核对
+ * information_schema 快照完成——不依赖这个号，所以忘了加一也不会漏迁移。
  */
 const SCHEMA_VERSION = 17;
 
