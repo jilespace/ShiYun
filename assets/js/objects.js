@@ -36,6 +36,8 @@
         sortKey: 'name',
         sortDir: 1,
         lastData: null,
+        listToken: 0,
+        settingsToken: 0,
     };
     if (!state.account && state.accounts.length) state.account = Number(state.accounts[0].id);
     if (!state.accounts.length) state.bucket = '';
@@ -302,7 +304,8 @@
     }
     window.__objectsEnterBucket = function () {
         // 进入桶时清掉上一个桶遗留的搜索/分页/设置状态，并让在飞响应失效
-        state.reqToken = (state.reqToken || 0) + 1;
+        state.listToken = (state.listToken || 0) + 1;
+        state.settingsToken = (state.settingsToken || 0) + 1;
         state.query = '';
         state.cursor = '';
         state.history = [];
@@ -404,7 +407,7 @@
 
     async function loadObjects() {
         if (!state.account || !state.bucket) return;
-        const token = ++state.reqToken;
+        const token = ++state.listToken;
         const bucket = state.bucket;
         renderCrumb();
         el.objHost.innerHTML = '<div class="blank">' + icon('loader')
@@ -421,12 +424,12 @@
         };
         try {
             const data = await api('objects.list', params, { method: 'GET' });
-            if (token !== state.reqToken || bucket !== state.bucket) return;
+            if (token !== state.listToken || bucket !== state.bucket) return;
             state.objects = data.objects || [];
             state.lastData = data;
             renderObjects(data);
         } catch (err) {
-            if (token !== state.reqToken || bucket !== state.bucket) return;
+            if (token !== state.listToken || bucket !== state.bucket) return;
             el.objHost.innerHTML = '<div class="blank">' + icon('alert-triangle')
                 + '<p class="blank__title">读不到对象</p>'
                 + '<p class="blank__hint">' + escapeHtml(err.message) + '</p></div>';
@@ -933,7 +936,7 @@
 
     async function loadSettings() {
         if (!state.bucket) return;
-        const token = ++state.reqToken;
+        const token = ++state.settingsToken;
         const bucket = state.bucket;
         const readOnly = Object.prototype.hasOwnProperty.call(state.bound, bucket)
             ? state.bound[bucket] : null;
@@ -946,15 +949,15 @@
                 const data = await api('objects.settings', {
                     account: state.account, bucket: bucket, section: section,
                 }, { method: 'GET' });
-                if (token !== state.reqToken || bucket !== state.bucket) return;
+                if (token !== state.settingsToken || bucket !== state.bucket) return;
                 cards.push(renderSetting(section, data));
             } catch (err) {
-                if (token !== state.reqToken || bucket !== state.bucket) return;
+                if (token !== state.settingsToken || bucket !== state.bucket) return;
                 cards.push(settingCard(section, '', '<p class="mwarn">'
                     + icon('alert-triangle') + '<span>' + escapeHtml(err.message) + '</span></p>'));
             }
         }
-        if (token !== state.reqToken || bucket !== state.bucket) return;
+        if (token !== state.settingsToken || bucket !== state.bucket) return;
         const notice = readOnly
             ? '<div class="mwarn" style="margin-bottom:12px">' + icon('alert-triangle')
                 + '<span>该桶已绑定为存储源「' + escapeHtml(readOnly) + '」，设置只读。</span></div>'

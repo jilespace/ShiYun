@@ -366,7 +366,7 @@ check(str_contains($js, 'data-obj-check'), '对象行有复选框');
 // 回归：进入桶时必须清掉上一个桶遗留的搜索词，否则新桶会带着旧 q 进入递归搜索。
 $enterPos = strpos($js, 'window.__objectsEnterBucket = function () {');
 check(
-    $enterPos !== false && str_contains(substr($js, $enterPos, 240), "state.query = ''"),
+    $enterPos !== false && str_contains(substr($js, $enterPos, 600), "state.query = ''"),
     '进入桶时重置搜索状态'
 );
 
@@ -456,7 +456,8 @@ foreach ([
 }
 
 $js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
-check(str_contains($js, 'state.reqToken'), '对象列表有请求序号防陈旧响应');
+check(str_contains($js, 'state.listToken') && str_contains($js, 'state.settingsToken'),
+    '对象列表与设置各有请求序号防陈旧响应');
 check(str_contains($js, '该桶已绑定为存储源，只读'), '上传对已绑定桶短路');
 check(str_contains($js, 'for (let attempt = 1; attempt <= 3; attempt++)'), '单次上传有重试');
 check(str_contains($js, "data-set=\"cors\" style=\"min-height:180px\""), 'CORS 使用 JSON 原样回显');
