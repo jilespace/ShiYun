@@ -1421,7 +1421,11 @@ function s3_restore_object(array $config, string $bucket, string $key, int $days
 {
     $days = max(1, min(30, $days));
     $tier = in_array($tier, ['Standard', 'Bulk', 'Expedited'], true) ? $tier : 'Standard';
-    $xml = '<RestoreRequest><Days>' . $days . '</Days><Tier>' . $tier . '</Tier></RestoreRequest>';
+    // 层级参数必须包在服务商对应的容器里：COS 用 CASJobParameters，
+    // AWS 兼容实现用 GlacierJobParameters；顶层 <Tier> 两家都不接受。
+    $params = (string) ($config['provider'] ?? 's3') === 'cos' ? 'CASJobParameters' : 'GlacierJobParameters';
+    $xml = '<RestoreRequest><Days>' . $days . '</Days><' . $params . '><Tier>' . $tier
+        . '</Tier></' . $params . '></RestoreRequest>';
     $res = s3_request(s3_bucket_config($config, $bucket), 'POST', $key, [
         'query'        => ['restore' => ''],
         'body'         => $xml,

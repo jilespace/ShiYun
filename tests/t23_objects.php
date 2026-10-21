@@ -245,10 +245,19 @@ $req = $requests(0);
 $headers = array_change_key_case((array) ($req['headers'] ?? []), CASE_LOWER);
 check(($headers['x-amz-copy-source'] ?? '') === '/photos-1250000000/a%20b%2Bc.jpg', '复制源键按路径段编码');
 
-$restore = s3_restore_object($cfg, 'photos-1250000000', 'cold.bin', 2);
+$restore = s3_restore_object($cfg + ['provider' => 'cos'], 'photos-1250000000', 'cold.bin', 2);
 check($restore['ok'] === true, '解冻返回成功');
 $req = $requests(0);
-check(str_contains((string) ($req['body'] ?? ''), '<Days>2</Days>'), '解冻请求体带天数');
+$restoreBody = (string) ($req['body'] ?? '');
+check(str_contains($restoreBody, '<Days>2</Days>'), '解冻请求体带天数');
+check(str_contains($restoreBody, '<CASJobParameters><Tier>Standard</Tier></CASJobParameters>'), 'COS 解冻层级包在 CASJobParameters');
+check(!str_contains($restoreBody, 'GlacierJobParameters'), 'COS 解冻不带 GlacierJobParameters');
+
+$restoreS3 = s3_restore_object($cfg + ['provider' => 's3'], 'photos-1250000000', 'cold.bin', 2);
+check($restoreS3['ok'] === true, 'S3 解冻返回成功');
+$req = $requests(0);
+$restoreBody = (string) ($req['body'] ?? '');
+check(str_contains($restoreBody, '<GlacierJobParameters><Tier>Standard</Tier></GlacierJobParameters>'), 'S3 解冻层级包在 GlacierJobParameters');
 
 $version = s3_get_subresource($cfg, 'photos-1250000000', 'versioning');
 check(in_array($version['status'], [200, 404], true), '子资源 GET 返回状态码');

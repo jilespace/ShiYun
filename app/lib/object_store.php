@@ -79,6 +79,7 @@ function object_account_config(array $row): array
         'access_key'    => (string) ($row['access_key'] ?? ''),
         'secret_key'    => (string) ($row['secret_key'] ?? ''),
         'session_token' => (string) ($row['session_token'] ?? ''),
+        'provider'      => (string) ($row['provider'] ?? 's3'),
     ];
 }
 
