@@ -280,6 +280,9 @@ check(str_contains($view, 'data-page="objects"'), '视图标记页面');
 check(str_contains($view, 'data-config'), '视图注入前端配置');
 $js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
 check(str_contains($js, "objects.account_save"), '前端提交账号保存');
+check(str_contains($js, 'state.accounts.some'), '前端校正已删除账号的失效 id');
+$css = (string) file_get_contents(BASE_PATH . '/assets/css/console.css');
+check(!str_contains($css, 'var(--accent)'), '对象存储样式使用已定义的主题变量');
 
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);

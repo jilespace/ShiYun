@@ -1684,7 +1684,7 @@ body.is-share .field {
 }
 
 .objcard:hover {
-    border-color: var(--accent);
+    border-color: var(--signal);
     transform: translateY(-1px);
 }
 
@@ -1706,7 +1706,7 @@ body.is-share .field {
 }
 
 .objrow__folder {
-    color: var(--accent);
+    color: var(--signal);
 }
 
 .objsort {
@@ -1719,13 +1719,13 @@ body.is-share .field {
 }
 
 .objsort:hover {
-    color: var(--accent);
+    color: var(--signal);
 }
 
 .objrow__check {
     width: 16px;
     height: 16px;
-    accent-color: var(--accent);
+    accent-color: var(--signal);
 }
 
 .objsettings {

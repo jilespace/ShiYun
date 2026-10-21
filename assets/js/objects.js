@@ -39,6 +39,10 @@
     };
     if (!state.account && state.accounts.length) state.account = Number(state.accounts[0].id);
     if (!state.accounts.length) state.bucket = '';
+    // URL 里的账号可能刚被删除：非零 id 会让上面的兜底失效，必须回到第一个可用账号
+    if (state.account && !state.accounts.some((a) => Number(a.id) === Number(state.account))) {
+        state.account = state.accounts.length ? Number(state.accounts[0].id) : 0;
+    }
 
     const el = {
         select: $('[data-account-select]'),
