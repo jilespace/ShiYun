@@ -19,6 +19,7 @@ function app_nav(): array
         ['id' => 'tags',      'label' => '标签',     'icon' => 'tag',           'href' => url('tags.list')],
         ['id' => 'tasks',     'label' => '传输',     'icon' => 'arrow-up-down', 'href' => url('tasks.list')],
         ['id' => 'stats',     'label' => '统计',     'icon' => 'bar-chart-3',   'href' => url('stats.show')],
+        ['id' => 'objects',   'label' => '对象存储', 'icon' => 'database',      'href' => url('objects.index')],
         ['id' => 'sources',   'label' => '存储源',   'icon' => 'server',        'href' => url('sources.list')],
         ['id' => 'settings',  'label' => '设置',     'icon' => 'settings',      'href' => url('settings.show')],
     ];

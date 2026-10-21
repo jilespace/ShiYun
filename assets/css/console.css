@@ -1577,3 +1577,206 @@ body.is-share .field {
         grid-template-columns: 1fr;
     }
 }
+
+/* ── 对象存储 ── */
+.objdetail__head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 16px 0 14px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 18px;
+}
+
+.objdetail__title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    font-family: var(--font-mono);
+}
+
+.objdetail__acts {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+    flex-wrap: wrap;
+}
+
+.objbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+
+.objcrumb {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+}
+
+.objcrumb button {
+    border: 0;
+    background: none;
+    color: var(--dim-2);
+    cursor: pointer;
+    padding: 2px 4px;
+    font: inherit;
+}
+
+.objcrumb button:hover {
+    color: var(--ink);
+}
+
+.objbar__tools {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+    flex-wrap: wrap;
+}
+
+.objbar__tools .minput {
+    width: 220px;
+}
+
+.objsel {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--panel);
+    font-size: 0.8rem;
+    color: var(--dim);
+}
+
+.objsel button {
+    margin-left: auto;
+}
+
+.objgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+}
+
+.objcard {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--panel);
+    cursor: pointer;
+    text-align: left;
+    color: inherit;
+    font: inherit;
+    transition: border-color 0.18s ease, transform 0.18s ease;
+}
+
+.objcard:hover {
+    border-color: var(--accent);
+    transform: translateY(-1px);
+}
+
+.objcard__name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 0.86rem;
+    word-break: break-all;
+}
+
+.objcard__meta {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 0.74rem;
+    color: var(--dim-2);
+}
+
+.objrow__folder {
+    color: var(--accent);
+}
+
+.objsort {
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    padding: 0;
+    cursor: pointer;
+}
+
+.objsort:hover {
+    color: var(--accent);
+}
+
+.objrow__check {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+}
+
+.objsettings {
+    display: grid;
+    gap: 16px;
+}
+
+.objset {
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: var(--panel);
+}
+
+.objset__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+}
+
+.objset__head h3 {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.objset__head .panel__note {
+    margin-left: auto;
+}
+
+.objset__body {
+    padding: 14px 16px;
+}
+
+.objset__body .minput,
+.objset__body .select,
+.objset__body textarea {
+    width: 100%;
+}
+
+.objset__body textarea {
+    min-height: 140px;
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+}
+
+@media (max-width: 720px) {
+    .objbar__tools,
+    .objbar__tools .minput {
+        width: 100%;
+        margin-left: 0;
+    }
+}

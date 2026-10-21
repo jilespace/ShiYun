@@ -269,6 +269,18 @@ check(str_contains($err, '单次上传上限'), '翻译 EntityTooLarge');
 $err2 = s3_error_message(['status' => 404, 'body' => '<Error><Code>NoSuchCORSConfiguration</Code></Error>', 'headers' => ''], '读取失败');
 check(str_contains($err2, '未配置 CORS'), '翻译 NoSuchCORSConfiguration');
 
+echo "\n· 页面骨架\n";
+$nav = (string) file_get_contents(BASE_PATH . '/app/lib/nav.php');
+check(str_contains($nav, "'objects'") && str_contains($nav, 'objects.index'), '导航新增对象存储入口');
+$module = (string) file_get_contents(BASE_PATH . '/app/modules/objects.php');
+check(str_contains($module, 'function objects_index'), '模块提供页面入口');
+check(str_contains($module, 'csp_content(object_account_origins'), '页面渲染前扩展 CSP');
+$view = (string) file_get_contents(BASE_PATH . '/app/views/objects.php');
+check(str_contains($view, 'data-page="objects"'), '视图标记页面');
+check(str_contains($view, 'data-config'), '视图注入前端配置');
+$js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
+check(str_contains($js, "objects.account_save"), '前端提交账号保存');
+
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
 q_exec('DELETE FROM user_settings WHERE user_id IN (?, ?)', [$uid, $otherId]);
