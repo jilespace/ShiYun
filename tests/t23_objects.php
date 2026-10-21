@@ -357,6 +357,13 @@ $badCors2 = false;
 try { object_cors_xml([['origins' => ['https://a.example'], 'methods' => ['TRACE']]]); } catch (InvalidArgumentException $e) { $badCors2 = true; }
 check($badCors2, 'CORS 非白名单方法被拒');
 
+echo "\n· 对象列表\n";
+$module = (string) file_get_contents(BASE_PATH . '/app/modules/objects.php');
+check(str_contains($module, 'function objects_list'), '对象列表接口存在');
+$js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
+check(str_contains($js, 'objects.list'), '前端请求对象列表');
+check(str_contains($js, 'data-obj-check'), '对象行有复选框');
+
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
 q_exec('DELETE FROM user_settings WHERE user_id IN (?, ?)', [$uid, $otherId]);

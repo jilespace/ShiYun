@@ -301,3 +301,43 @@ function objects_bucket_bind(): void
     activity_log($userId, 'object.bucket_bind', null, $name . '（' . $bucket . '）');
     json_ok(['id' => $id, 'name' => $name]);
 }
+
+function objects_list(): void
+{
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+
+    $query = trim((string) input('q', ''));
+    $prefix = (string) input('prefix', '');
+    $delimiter = $query !== '' ? '' : '/';
+    if ($query !== '') {
+        $prefix = object_key_join($prefix, $query);
+    }
+
+    // 目录浏览按页读取；前缀搜索是递归扫描，限制单次最多 200 条并明确截断。
+    $maxKeys = min(1000, max(1, input_int('max_keys', 100)));
+    if ($query !== '') {
+        $maxKeys = min(200, $maxKeys);
+    }
+
+    try {
+        $page = s3_list_objects_page(object_account_config($account), $bucket, [
+            'prefix'             => $prefix,
+            'delimiter'          => $delimiter,
+            'continuation_token' => (string) input('cursor', ''),
+            'max_keys'           => $maxKeys,
+        ]);
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    }
+
+    json_ok($page + [
+        'bucket'    => $bucket,
+        'prefix'    => $prefix,
+        'delimiter' => $delimiter,
+        'boundBy'   => object_bound_by((int) $account['user_id'], $bucket),
+    ]);
+}

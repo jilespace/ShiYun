@@ -357,6 +357,212 @@
         }
     });
 
+    /* ---------------------------------------------------------- 对象列表 */
+
+    function parentPrefix(prefix) {
+        const trimmed = prefix.replace(/\/$/, '');
+        const pos = trimmed.lastIndexOf('/');
+        return pos === -1 ? '' : trimmed.slice(0, pos + 1);
+    }
+
+    function renderCrumb() {
+        const parts = state.prefix.split('/').filter(Boolean);
+        let acc = '';
+        const items = ['<button type="button" data-crumb-to="">' + escapeHtml(state.bucket) + '</button>'];
+        parts.forEach((part) => {
+            acc += part + '/';
+            items.push('<span>/</span><button type="button" data-crumb-to="' + escapeHtml(acc) + '">'
+                + escapeHtml(part) + '</button>');
+        });
+        el.crumb.innerHTML = items.join('');
+    }
+
+    async function loadObjects() {
+        if (!state.account || !state.bucket) return;
+        renderCrumb();
+        el.objHost.innerHTML = '<div class="blank">' + icon('loader')
+            + '<p class="blank__hint">正在读取对象…</p></div>';
+        state.selected.clear();
+        updateSelection();
+        const params = {
+            account: state.account,
+            bucket: state.bucket,
+            prefix: state.prefix,
+            q: state.query,
+            cursor: state.cursor,
+            max_keys: state.query !== '' ? 200 : 100,
+        };
+        try {
+            const data = await api('objects.list', params, { method: 'GET' });
+            state.objects = data.objects || [];
+            state.lastData = data;
+            renderObjects(data);
+        } catch (err) {
+            el.objHost.innerHTML = '<div class="blank">' + icon('alert-triangle')
+                + '<p class="blank__title">读不到对象</p>'
+                + '<p class="blank__hint">' + escapeHtml(err.message) + '</p></div>';
+        }
+    }
+    window.__objectsLoadObjects = loadObjects;
+
+    function iconFor(key) {
+        const ext = (key.split('.').pop() || '').toLowerCase();
+        if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext)) return 'file-image';
+        if (['mp4', 'mov', 'mkv', 'webm'].includes(ext)) return 'file-video';
+        if (['mp3', 'wav', 'flac', 'm4a'].includes(ext)) return 'file-audio';
+        if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) return 'file-archive';
+        if (['js', 'ts', 'php', 'py', 'go', 'java', 'json', 'xml'].includes(ext)) return 'file-code';
+        return 'file';
+    }
+
+    function renderObjects(data) {
+        // 已绑定的桶只读：保留下载与详情，隐藏复制/删除等写操作
+        const readOnly = !!data.boundBy;
+        $$('[data-obj-upload], [data-obj-mkdir]').forEach((btn) => { btn.disabled = readOnly; });
+        const rows = [];
+        const objects = (data.objects || []).slice().sort((a, b) => {
+            const pick = (o) => state.sortKey === 'size'
+                ? Number(o.size)
+                : (state.sortKey === 'modified' ? String(o.modified || '') : String(o.name || ''));
+            const av = pick(a);
+            const bv = pick(b);
+            if (av < bv) return -state.sortDir;
+            if (av > bv) return state.sortDir;
+            return 0;
+        });
+        (data.folders || []).forEach((f) => {
+            rows.push('<tr data-folder="' + escapeHtml(f.prefix) + '">'
+                + '<td><input class="objrow__check" type="checkbox" disabled></td>'
+                + '<td><div class="tbl__name objrow__folder">' + icon('folder')
+                + '<span>' + escapeHtml(f.name) + '/</span></div></td>'
+                + '<td class="muted">—</td><td class="muted">—</td><td></td></tr>');
+        });
+        objects.forEach((o) => {
+            const key = escapeHtml(o.key);
+            const isFolder = o.key.endsWith('/') && Number(o.size) === 0;
+            const acts = '<button class="chipbtn" type="button" data-obj-download="' + key + '">下载</button>'
+                + (readOnly ? '' : '<button class="chipbtn" type="button" data-obj-copy="' + key + '">复制/移动</button>')
+                + '<button class="chipbtn" type="button" data-obj-info="' + key + '">详情</button>'
+                + (readOnly ? '' : '<button class="chipbtn chipbtn--danger" type="button" data-obj-del="' + key + '">删除</button>');
+            rows.push('<tr data-key="' + key + '">'
+                + '<td><input class="objrow__check" type="checkbox" data-obj-check value="' + key + '"'
+                + (readOnly ? ' disabled' : (state.selected.has(o.key) ? ' checked' : '')) + '></td>'
+                + '<td><div class="tbl__name' + (isFolder ? ' objrow__folder' : '') + '">'
+                + icon(isFolder ? 'folder' : iconFor(o.key))
+                + '<span>' + escapeHtml(o.name) + '</span></div></td>'
+                + '<td class="num">' + (isFolder ? '—' : humanSize(o.size)) + '</td>'
+                + '<td class="muted nowrap">' + escapeHtml((o.modified || '').slice(0, 16).replace('T', ' ')) + '</td>'
+                + '<td><div class="tbl__acts">' + acts + '</div></td></tr>');
+        });
+
+        if (!rows.length) {
+            el.objHost.innerHTML = '<div class="blank">' + icon('archive')
+                + '<p class="blank__title">这个前缀下没有对象</p>'
+                + '<p class="blank__hint">'
+                + (readOnly ? '该桶已绑定为存储源，内容只读，可下载查看。' : '拖放文件到页面，或点「上传」。')
+                + '</p></div>';
+        } else {
+            const note = data.truncated
+                ? (state.query !== '' ? '已截断，仅显示前 ' + objects.length + ' 个对象' : '还有更多，可翻页')
+                : '已到末页';
+            el.objHost.innerHTML = '<div class="tblwrap"><table class="tbl"><thead><tr>'
+                + '<th style="width:34px"><input type="checkbox" data-obj-check-all aria-label="全选"'
+                + (readOnly ? ' disabled' : '') + '></th>'
+                + '<th><button class="objsort" type="button" data-sort="name">名称</button></th>'
+                + '<th class="num"><button class="objsort" type="button" data-sort="size">大小</button></th>'
+                + '<th><button class="objsort" type="button" data-sort="modified">更新时间</button></th>'
+                + '<th>操作</th>'
+                + '</tr></thead><tbody>' + rows.join('') + '</tbody></table></div>'
+                + '<div class="objbar" style="margin-top:14px">'
+                + '<span class="muted">' + note + '</span>'
+                + '<div class="objbar__tools">'
+                + '<button class="chipbtn" type="button" data-obj-prev' + (state.history.length ? '' : ' disabled') + '>上一页</button>'
+                + '<button class="chipbtn" type="button" data-obj-next' + (data.truncated && data.next_token ? '' : ' disabled') + '>下一页</button>'
+                + '</div></div>';
+        }
+        state.nextToken = data.next_token || '';
+        state.truncated = !!data.truncated;
+    }
+
+    function updateSelection() {
+        const count = state.selected.size;
+        el.selection?.toggleAttribute('hidden', count === 0);
+        if (el.selectedCount) el.selectedCount.textContent = '已选 ' + count + ' 项';
+    }
+
+    el.objHost.addEventListener('change', (e) => {
+        const all = e.target.closest('[data-obj-check-all]');
+        if (all) {
+            $$('[data-obj-check]', el.objHost).forEach((box) => {
+                box.checked = all.checked;
+                if (all.checked) state.selected.add(box.value); else state.selected.delete(box.value);
+            });
+            updateSelection();
+            return;
+        }
+        const box = e.target.closest('[data-obj-check]');
+        if (box) {
+            if (box.checked) state.selected.add(box.value); else state.selected.delete(box.value);
+            updateSelection();
+        }
+    });
+
+    el.objHost.addEventListener('click', (e) => {
+        const sort = e.target.closest('[data-sort]');
+        if (sort) {
+            const key = sort.dataset.sort;
+            state.sortDir = state.sortKey === key ? -state.sortDir : 1;
+            state.sortKey = key;
+            if (state.lastData) renderObjects(state.lastData);
+            return;
+        }
+
+        const folder = e.target.closest('[data-folder]');
+        if (folder) {
+            state.prefix = folder.dataset.folder;
+            state.query = '';
+            state.cursor = '';
+            state.history = [];
+            if (el.search) el.search.value = '';
+            loadObjects();
+            updateQuery();
+            return;
+        }
+        const next = e.target.closest('[data-obj-next]');
+        if (next && state.nextToken) {
+            state.history.push(state.cursor);
+            state.cursor = state.nextToken;
+            loadObjects();
+            return;
+        }
+        const prev = e.target.closest('[data-obj-prev]');
+        if (prev && state.history.length) {
+            state.cursor = state.history.pop();
+            loadObjects();
+        }
+    });
+
+    el.crumb.addEventListener('click', (e) => {
+        const to = e.target.closest('[data-crumb-to]');
+        if (to) {
+            state.prefix = to.dataset.crumbTo === state.bucket ? '' : to.dataset.crumbTo;
+            state.query = '';
+            state.cursor = '';
+            state.history = [];
+            if (el.search) el.search.value = '';
+            loadObjects();
+            updateQuery();
+        }
+    });
+
+    el.search?.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        state.query = el.search.value.trim();
+        state.cursor = '';
+        state.history = [];
+        loadObjects();
+    });
+
     renderAccounts();
 
     // 首屏加载：函数由后续任务定义；这里只负责在定义就绪后调用一次
