@@ -730,6 +730,65 @@
         if (e.dataTransfer && e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
     });
 
+    /* ---------------------------------------------------------- 下载与详情 */
+
+    async function downloadKey(key) {
+        try {
+            const r = await api('objects.download_sign', {
+                account: state.account, bucket: state.bucket, key: key,
+            });
+            const a = document.createElement('a');
+            a.href = r.url;
+            a.target = '_blank';
+            a.rel = 'noopener';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        } catch (err) {
+            if (err.code === 'restore_required') {
+                const days = await SY.prompt('对象在归档存储中', '解冻天数（1–30）', '1');
+                if (days === null) return;
+                try {
+                    const r = await api('objects.restore', {
+                        account: state.account, bucket: state.bucket, key: key, days: Number(days) || 1,
+                    });
+                    toast(r.message);
+                } catch (e2) {
+                    toast(e2.message, 'err');
+                }
+                return;
+            }
+            toast(err.message, 'err');
+        }
+    }
+
+    async function showInfo(key) {
+        try {
+            const m = await api('objects.head', {
+                account: state.account, bucket: state.bucket, key: key,
+            });
+            SY.openModal('对象详情 · ' + key,
+                '<div class="dupelist">'
+                + '<div><span>大小</span><b>' + humanSize(m.size) + '</b></div>'
+                + '<div><span>类型</span><b>' + escapeHtml(m.content_type || '—') + '</b></div>'
+                + '<div><span>ETag</span><b>' + escapeHtml(m.etag || '—') + '</b></div>'
+                + '<div><span>更新时间</span><b>' + escapeHtml(m.last_modified || '—') + '</b></div>'
+                + '<div><span>存储类型</span><b>' + escapeHtml(m.storage_class || '—') + '</b></div>'
+                + '</div>',
+                '<button class="mbtn" type="button" data-x="close">关闭</button>');
+            $('[data-modal-foot]').querySelector('[data-x="close"]').addEventListener('click', SY.closeModal);
+        } catch (err) {
+            toast(err.message, 'err');
+        }
+    }
+
+    el.objHost.addEventListener('click', (e) => {
+        const down = e.target.closest('[data-obj-download]');
+        if (down) { downloadKey(down.dataset.objDownload); return; }
+        const info = e.target.closest('[data-obj-info]');
+        if (info) { showInfo(info.dataset.objInfo); }
+    });
+
     renderAccounts();
 
     // 首屏加载：函数由后续任务定义；这里只负责在定义就绪后调用一次

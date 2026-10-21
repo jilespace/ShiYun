@@ -397,6 +397,15 @@ check($done['ok'] === true, '完成分片上传');
 s3_multipart_abort($cfg, 'photos-1250000000', 'big.bin', $uploadId);
 check(true, '放弃分片不抛异常');
 
+echo "\n· 下载与详情\n";
+$module = (string) file_get_contents(BASE_PATH . '/app/modules/objects.php');
+check(str_contains($module, 'function objects_download_sign'), '下载预签名接口存在');
+check(str_contains($module, 'function objects_restore'), '解冻接口存在');
+check(str_contains($module, 'restore_required'), '归档对象会要求先解冻');
+$js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
+check(str_contains($js, 'objects.download_sign'), '前端请求下载链接');
+check(str_contains($js, 'objects.restore'), '前端可触发解冻');
+
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
 q_exec('DELETE FROM user_settings WHERE user_id IN (?, ?)', [$uid, $otherId]);

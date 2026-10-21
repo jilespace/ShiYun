@@ -573,3 +573,90 @@ function objects_cors_allow(): void
     activity_log($userId, 'object.cors_allow', null, $bucket . ' ← ' . $origin);
     json_ok(['ok' => true, 'origin' => $origin, 'rules' => $rules]);
 }
+
+/* ------------------------------------------------------- 下载、详情与解冻 */
+
+function objects_head(): void
+{
+    require_method('POST');
+    require_csrf();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    $key = objects_key_or_fail();
+    try {
+        $meta = s3_head_object(object_account_config($account), $bucket, $key);
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    }
+    if ($meta === null) {
+        json_fail('对象不存在。', 404, 'not_found');
+    }
+    json_ok(['key' => $key] + $meta);
+}
+
+function objects_download_sign(): void
+{
+    require_method('POST');
+    require_csrf();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    $key = objects_key_or_fail();
+
+    try {
+        $meta = s3_head_object(object_account_config($account), $bucket, $key);
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    }
+    if ($meta === null) {
+        json_fail('对象不存在。', 404, 'not_found');
+    }
+    if (in_array(strtoupper((string) $meta['storage_class']), object_archive_classes(), true)
+        && !str_contains(strtolower((string) $meta['restore']), 'ongoing-request="false"')) {
+        json_fail('该对象在归档存储中，需先解冻才能下载。', 409, 'restore_required');
+    }
+
+    $ttl = max(60, min(3600, input_int('ttl', 300)));
+    $filename = basename($key) ?: 'download.bin';
+    $disposition = "attachment; filename*=UTF-8''" . rawurlencode($filename);
+    $url = s3_presign_url(
+        object_bucket_config($account, $bucket),
+        'GET',
+        $key,
+        $ttl,
+        ['response-content-disposition' => $disposition]
+    );
+    json_ok(['url' => $url, 'expires' => $ttl, 'key' => $key]);
+}
+
+function objects_restore(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    objects_assert_mutable($userId, $bucket);
+    $key = objects_key_or_fail();
+
+    $result = s3_restore_object(
+        object_account_config($account),
+        $bucket,
+        $key,
+        input_int('days', 1),
+        (string) input('tier', 'Standard')
+    );
+    if (!$result['ok']) {
+        json_fail((string) $result['message'], 502, 's3_error');
+    }
+    activity_log($userId, 'object.restore', null, $bucket . ' / ' . mb_substr($key, 0, 120));
+    json_ok($result);
+}
