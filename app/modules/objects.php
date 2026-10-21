@@ -88,7 +88,13 @@ function objects_account_save(): void
     }
 
     activity_log($userId, 'object.account_save', null, (string) input('name', ''));
-    json_ok(['id' => $id]);
+    json_ok([
+        'id'      => $id,
+        'warning' => source_risk_note([
+            'driver' => 's3',
+            'config' => ['endpoint' => (string) input('endpoint', '')],
+        ]),
+    ]);
 }
 
 function objects_account_delete(): void
@@ -299,7 +305,11 @@ function objects_bucket_bind(): void
     ]);
 
     activity_log($userId, 'object.bucket_bind', null, $name . '（' . $bucket . '）');
-    json_ok(['id' => $id, 'name' => $name]);
+    json_ok([
+        'id'      => $id,
+        'name'    => $name,
+        'warning' => source_risk_note(['driver' => 's3', 'config' => $config]),
+    ]);
 }
 
 function objects_list(): void
@@ -479,6 +489,20 @@ function objects_upload_complete(): void
     $parts = input('parts', []);
     if ($uploadId === '' || !is_array($parts) || $parts === []) {
         json_fail('分片列表不完整。');
+    }
+    if (count($parts) > 10000) {
+        json_fail('分片数量超过上限。', 422, 'too_large');
+    }
+    $prevPart = 0;
+    $seenParts = [];
+    foreach ($parts as $part) {
+        $number = (int) ($part['part_number'] ?? 0);
+        $etag = (string) ($part['etag'] ?? '');
+        if ($number <= $prevPart || $number > 10000 || $etag === '' || isset($seenParts[$number])) {
+            json_fail('分片列表不合法：编号需唯一且递增。', 422, 'invalid');
+        }
+        $prevPart = $number;
+        $seenParts[$number] = true;
     }
 
     try {
@@ -694,6 +718,17 @@ function objects_copy(): void
         if ((int) $meta['size'] > 5 * 1024 * 1024 * 1024) {
             json_fail('超过 5 GiB 的对象暂不支持复制（Multipart Copy 未实现）。', 422, 'too_large');
         }
+        if (in_array(strtoupper((string) $meta['storage_class']), object_archive_classes(), true)
+            && !str_contains(strtolower((string) $meta['restore']), 'ongoing-request="false"')) {
+            json_fail('源对象在归档存储中，需先解冻才能复制。', 409, 'restore_required');
+        }
+
+        // 目标已存在时要求显式覆盖，避免手滑把现有对象冲掉
+        $targetMeta = s3_head_object(object_account_config($account), $bucket, $target);
+        if ($targetMeta !== null && !input_bool('overwrite')) {
+            json_fail('目标对象已存在。确认覆盖后重试。', 409, 'target_exists');
+        }
+
         $class = object_storage_class_or_fail((string) input('storage_class', ''));
         $result = s3_copy_object(
             object_account_config($account),
@@ -706,6 +741,10 @@ function objects_copy(): void
             json_fail((string) $result['message'], 502, 's3_error');
         }
         if ($mode === 'move') {
+            // 复制成功后再确认目标确实存在，然后才允许删源
+            if (s3_head_object(object_account_config($account), $bucket, $target) === null) {
+                json_fail('复制未生效，已保留源对象。', 502, 'copy_failed');
+            }
             $deleted = s3_delete_object(object_account_config($account), $bucket, $source);
             if (!$deleted['ok']) {
                 json_fail('复制成功，但删除源对象失败：' . $deleted['message'], 502, 's3_error');
@@ -750,7 +789,8 @@ function objects_delete(): void
     } catch (RuntimeException $e) {
         json_fail($e->getMessage(), 502, 's3_error');
     }
-    if (!$result['ok']) {
+    // 全部失败才报错；部分成功时把 deleted/failed/errors 原样交给前端
+    if (!$result['ok'] && (int) ($result['deleted'] ?? 0) === 0) {
         json_fail((string) $result['message'], 502, 's3_error');
     }
 
@@ -976,6 +1016,10 @@ function objects_stat(): void
 
     try {
         do {
+            // 在发下一页请求前先看时间预算，避免一次慢请求把进程拖过执行上限
+            if ($pages > 0 && microtime(true) - $start >= 20) {
+                break;
+            }
             $page = s3_list_objects_page($config, $bucket, [
                 'delimiter'          => '',
                 'continuation_token' => $token,

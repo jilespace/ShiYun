@@ -431,6 +431,36 @@ $js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
 check(str_contains($js, 'objects.settings'), '前端读取设置');
 check(str_contains($js, "data-tab=\"settings\"") || str_contains($js, 'data-tab-panel'), '前端有设置页签');
 
+echo "\n· 最终审查修复\n";
+$copyFail = s3_copy_object($cfg, 'photos-1250000000', 'a.txt', 'copy-fail.txt');
+check($copyFail['ok'] === false, 'CopyObject 200+<Error> 判为失败');
+$completeFail = s3_multipart_complete($cfg, 'photos-1250000000', 'complete-fail.bin', 'uid', [
+    ['part_number' => 1, 'etag' => '"e"'],
+]);
+check($completeFail['ok'] === false, 'CompleteMultipartUpload 200+<Error> 判为失败');
+s3_delete_objects($cfg, 'photos-1250000000', ['a<b&c".txt']);
+$req = $requests(0);
+check(str_contains((string) ($req['body'] ?? ''), '<Key>a&lt;b&amp;c&quot;.txt</Key>'),
+    '批量删除键名 XML 转义');
+
+$module = (string) file_get_contents(BASE_PATH . '/app/modules/objects.php');
+foreach ([
+    'objects_upload_sign', 'objects_upload_init', 'objects_upload_part',
+    'objects_upload_complete', 'objects_upload_abort', 'objects_copy',
+    'objects_delete', 'objects_mkdir', 'objects_restore', 'objects_setting_save',
+    'objects_cors_allow', 'objects_bucket_purge', 'objects_bucket_delete',
+] as $fn) {
+    $pos = strpos($module, 'function ' . $fn);
+    $chunk = $pos === false ? '' : substr($module, $pos, 900);
+    check(str_contains($chunk, 'objects_assert_mutable'), $fn . ' 有绑定守卫');
+}
+
+$js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
+check(str_contains($js, 'state.reqToken'), '对象列表有请求序号防陈旧响应');
+check(str_contains($js, '该桶已绑定为存储源，只读'), '上传对已绑定桶短路');
+check(str_contains($js, 'for (let attempt = 1; attempt <= 3; attempt++)'), '单次上传有重试');
+check(str_contains($js, "data-set=\"cors\" style=\"min-height:180px\""), 'CORS 使用 JSON 原样回显');
+
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
 q_exec('DELETE FROM user_settings WHERE user_id IN (?, ?)', [$uid, $otherId]);

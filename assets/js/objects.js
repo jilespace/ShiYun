@@ -67,9 +67,9 @@
 
     function updateQuery() {
         const params = new URLSearchParams(location.search);
-        if (state.account) params.set('account', String(state.account));
-        if (state.bucket) params.set('bucket', state.bucket);
-        if (state.prefix) params.set('prefix', state.prefix);
+        if (state.account) params.set('account', String(state.account)); else params.delete('account');
+        if (state.bucket) params.set('bucket', state.bucket); else params.delete('bucket');
+        if (state.prefix) params.set('prefix', state.prefix); else params.delete('prefix');
         history.replaceState(null, '', location.pathname + '?' + params.toString());
     }
 
@@ -291,7 +291,8 @@
 
     function renderDetailHead() {
         el.title.textContent = state.bucket;
-        const boundBy = state.bound[state.bucket];
+        const boundBy = Object.prototype.hasOwnProperty.call(state.bound, state.bucket)
+            ? state.bound[state.bucket] : null;
         el.detailActs.innerHTML = boundBy
             ? '<span class="pill">' + escapeHtml(boundBy) + '</span>'
             : '<button class="chipbtn" type="button" data-bucket-bind>'
@@ -300,11 +301,22 @@
                 + '<button class="chipbtn chipbtn--danger" type="button" data-bucket-del>删除桶</button>';
     }
     window.__objectsEnterBucket = function () {
-        // 进入桶时清掉上一个桶遗留的搜索/分页状态，否则旧关键字会被带进新桶。
+        // 进入桶时清掉上一个桶遗留的搜索/分页/设置状态，并让在飞响应失效
+        state.reqToken = (state.reqToken || 0) + 1;
         state.query = '';
         state.cursor = '';
         state.history = [];
         if (el.search) el.search.value = '';
+        const objectsTab = $('[data-tab="objects"]');
+        const settingsTab = $('[data-tab="settings"]');
+        if (objectsTab && settingsTab) {
+            objectsTab.classList.add('is-on');
+            settingsTab.classList.remove('is-on');
+        }
+        $$('[data-tab-panel]').forEach((panel) => {
+            panel.toggleAttribute('hidden', panel.dataset.tabPanel !== 'objects');
+        });
+        if (el.settingsHost) el.settingsHost.innerHTML = '';
         el.bucketView.hidden = true;
         el.detailView.hidden = false;
         renderDetailHead();
@@ -392,6 +404,8 @@
 
     async function loadObjects() {
         if (!state.account || !state.bucket) return;
+        const token = ++state.reqToken;
+        const bucket = state.bucket;
         renderCrumb();
         el.objHost.innerHTML = '<div class="blank">' + icon('loader')
             + '<p class="blank__hint">正在读取对象…</p></div>';
@@ -407,10 +421,12 @@
         };
         try {
             const data = await api('objects.list', params, { method: 'GET' });
+            if (token !== state.reqToken || bucket !== state.bucket) return;
             state.objects = data.objects || [];
             state.lastData = data;
             renderObjects(data);
         } catch (err) {
+            if (token !== state.reqToken || bucket !== state.bucket) return;
             el.objHost.innerHTML = '<div class="blank">' + icon('alert-triangle')
                 + '<p class="blank__title">读不到对象</p>'
                 + '<p class="blank__hint">' + escapeHtml(err.message) + '</p></div>';
@@ -468,8 +484,12 @@
                 + '<td><div class="tbl__acts">' + acts + '</div></td></tr>');
         });
 
+        const notice = readOnly
+            ? '<div class="mwarn" style="margin-bottom:12px">' + icon('alert-triangle')
+                + '<span>该桶已绑定为存储源「' + escapeHtml(data.boundBy) + '」，对象页只读。</span></div>'
+            : '';
         if (!rows.length) {
-            el.objHost.innerHTML = '<div class="blank">' + icon('archive')
+            el.objHost.innerHTML = notice + '<div class="blank">' + icon('archive')
                 + '<p class="blank__title">这个前缀下没有对象</p>'
                 + '<p class="blank__hint">'
                 + (readOnly ? '该桶已绑定为存储源，内容只读，可下载查看。' : '拖放文件到页面，或点「上传」。')
@@ -478,7 +498,7 @@
             const note = data.truncated
                 ? (state.query !== '' ? '已截断，仅显示前 ' + objects.length + ' 个对象' : '还有更多，可翻页')
                 : '已到末页';
-            el.objHost.innerHTML = '<div class="tblwrap"><table class="tbl"><thead><tr>'
+            el.objHost.innerHTML = notice + '<div class="tblwrap"><table class="tbl"><thead><tr>'
                 + '<th style="width:34px"><input type="checkbox" data-obj-check-all aria-label="全选"'
                 + (readOnly ? ' disabled' : '') + '></th>'
                 + '<th><button class="objsort" type="button" data-sort="name">名称</button></th>'
@@ -620,12 +640,21 @@
     }
 
     async function uploadSingle(file, key, progress) {
-        const sign = await api('objects.upload_sign', {
-            account: state.account, bucket: state.bucket, key: key,
-            storage_class: selectedStorageClass(),
-            content_type: file.type || 'application/octet-stream',
-        });
-        await xhrPut(sign.url, file, sign.headers, progress);
+        let lastErr = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                const sign = await api('objects.upload_sign', {
+                    account: state.account, bucket: state.bucket, key: key,
+                    storage_class: selectedStorageClass(),
+                    content_type: file.type || 'application/octet-stream',
+                });
+                await xhrPut(sign.url, file, sign.headers, progress);
+                return;
+            } catch (err) {
+                lastErr = err;
+            }
+        }
+        throw lastErr || new Error('上传失败');
     }
 
     async function uploadMultipart(file, key, progress) {
@@ -639,9 +668,10 @@
         const parts = new Array(total);
         let doneBytes = 0;
         let next = 1;
+        let cancelled = false;
 
         async function worker() {
-            while (next <= total) {
+            while (next <= total && !cancelled) {
                 const partNumber = next++;
                 const start = (partNumber - 1) * partSize;
                 const blob = file.slice(start, Math.min(start + partSize, file.size));
@@ -658,9 +688,13 @@
                             progress(doneBytes + loaded, file.size);
                         });
                     } catch (err) {
-                        if (attempt >= 3) throw err;
+                        if (attempt >= 3) {
+                            cancelled = true;
+                            throw err;
+                        }
                     }
                 }
+                if (cancelled) return;
                 if (!etag) throw new Error('分片 ' + partNumber + ' 没有返回 ETag');
                 parts[partNumber - 1] = { part_number: partNumber, etag: etag };
                 doneBytes += blob.size;
@@ -675,6 +709,7 @@
                 upload_id: init.upload_id, parts: parts.filter(Boolean),
             });
         } catch (err) {
+            cancelled = true;
             await api('objects.upload_abort', {
                 account: state.account, bucket: state.bucket, key: key, upload_id: init.upload_id,
             }).catch(() => {});
@@ -684,6 +719,10 @@
 
     async function uploadFiles(files) {
         if (!files.length || !state.bucket) return;
+        if (Object.prototype.hasOwnProperty.call(state.bound, state.bucket)) {
+            toast('该桶已绑定为存储源，只读', 'err');
+            return;
+        }
         let corsOk = false;
         try {
             corsOk = await ensureCors();
@@ -791,19 +830,51 @@
 
     /* ---------------------------------------------------------- 复制/删除/文件夹 */
 
+    function chooseCopyMode(key) {
+        return new Promise((resolve) => {
+            SY.openModal('复制还是移动？',
+                '<p class="mhint">对象：' + escapeHtml(key) + '。移动会删除源对象。</p>',
+                '<button class="mbtn" type="button" data-x="copy">复制</button>'
+                + '<button class="mbtn mbtn--primary" type="button" data-x="move">移动</button>'
+                + '<button class="mbtn" type="button" data-x="cancel">取消</button>',
+                () => resolve(null));
+            const foot = $('[data-modal-foot]');
+            const pick = (mode) => {
+                // 先 resolve 再 close：closeModal 会触发 onClose 的 resolve(null)
+                resolve(mode);
+                SY.closeModal();
+            };
+            foot.querySelector('[data-x="copy"]').addEventListener('click', () => pick('copy'));
+            foot.querySelector('[data-x="move"]').addEventListener('click', () => pick('move'));
+            foot.querySelector('[data-x="cancel"]').addEventListener('click', SY.closeModal);
+        });
+    }
+
     async function copyKey(key) {
-        const isMove = await SY.confirm(
-            '复制还是移动？',
-            '对象：' + key + '。选「移动」会删除源对象；选「取消」则只复制。',
-            '移动',
-            false
-        );
+        const mode = await chooseCopyMode(key);
+        if (mode === null) return;
         const target = await SY.prompt('目标对象键', '输入完整目标键', key);
         if (target === null) return;
+
+        let overwrite = false;
+        try {
+            await api('objects.head', {
+                account: state.account, bucket: state.bucket, key: target.trim(),
+            });
+            const ok = await SY.confirm('目标已存在', '覆盖现有对象？', '覆盖', true);
+            if (!ok) return;
+            overwrite = true;
+        } catch (err) {
+            if (err.code !== 'not_found') {
+                toast(err.message, 'err');
+                return;
+            }
+        }
+
         try {
             const r = await api('objects.copy', {
                 account: state.account, bucket: state.bucket,
-                source: key, target: target.trim(), mode: isMove ? 'move' : 'copy',
+                source: key, target: target.trim(), mode: mode, overwrite: overwrite,
             });
             toast(r.message);
             loadObjects();
@@ -862,6 +933,10 @@
 
     async function loadSettings() {
         if (!state.bucket) return;
+        const token = ++state.reqToken;
+        const bucket = state.bucket;
+        const readOnly = Object.prototype.hasOwnProperty.call(state.bound, bucket)
+            ? state.bound[bucket] : null;
         el.settingsHost.innerHTML = '<div class="blank">' + icon('loader')
             + '<p class="blank__hint">正在读取设置…</p></div>';
         const sections = ['versioning', 'website', 'cors', 'lifecycle', 'tagging', 'acl', 'policy'];
@@ -869,15 +944,27 @@
         for (const section of sections) {
             try {
                 const data = await api('objects.settings', {
-                    account: state.account, bucket: state.bucket, section: section,
+                    account: state.account, bucket: bucket, section: section,
                 }, { method: 'GET' });
+                if (token !== state.reqToken || bucket !== state.bucket) return;
                 cards.push(renderSetting(section, data));
             } catch (err) {
+                if (token !== state.reqToken || bucket !== state.bucket) return;
                 cards.push(settingCard(section, '', '<p class="mwarn">'
                     + icon('alert-triangle') + '<span>' + escapeHtml(err.message) + '</span></p>'));
             }
         }
-        el.settingsHost.innerHTML = cards.join('');
+        if (token !== state.reqToken || bucket !== state.bucket) return;
+        const notice = readOnly
+            ? '<div class="mwarn" style="margin-bottom:12px">' + icon('alert-triangle')
+                + '<span>该桶已绑定为存储源「' + escapeHtml(readOnly) + '」，设置只读。</span></div>'
+            : '';
+        el.settingsHost.innerHTML = notice + cards.join('');
+        if (readOnly) {
+            $$('button, input, textarea, select', el.settingsHost).forEach((node) => {
+                node.disabled = true;
+            });
+        }
     }
     window.__objectsLoadSettings = loadSettings;
 
@@ -901,13 +988,12 @@
                 + ' style="margin-top:10px;margin-left:8px">停用</button>');
         }
         if (section === 'cors') {
-            const rules = (v.rules || [])
-                .flatMap((r) => r.origins.map((origin) => origin + ', ' + r.methods.join(' ')))
-                .join('\n');
+            // 用 JSON 原样回显，避免保存时丢掉 headers/expose/max_age 或拆散多来源规则
+            const rules = JSON.stringify(v.rules || [], null, 2);
             return settingCard('CORS', '浏览器直传需要放行本站',
-                '<textarea class="minput" data-set="cors" placeholder="每行一条：来源, GET PUT HEAD">'
+                '<textarea class="minput" data-set="cors" style="min-height:180px">'
                 + escapeHtml(rules) + '</textarea>'
-                + '<p class="mhint">每行格式：<code>https://example.com, GET PUT HEAD</code></p>'
+                + '<p class="mhint">JSON 规则数组，字段：origins / methods / headers / expose / max_age。</p>'
                 + '<button class="chipbtn" type="button" data-set-cors="1" style="margin-top:10px">保存</button>');
         }
         if (section === 'lifecycle') {
@@ -1038,14 +1124,17 @@
             payload = { enabled: true, index: val('index'), error: val('error') };
         } else if (save.hasAttribute('data-set-cors')) {
             section = 'cors';
-            const rules = val('cors').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
-                const [originPart, methodPart] = line.split(',');
-                return {
-                    origins: [originPart.trim()],
-                    methods: (methodPart || 'GET PUT HEAD').trim().split(/\s+/),
-                    headers: ['*'], expose: ['ETag'], max_age: 3600,
-                };
-            });
+            let rules;
+            try {
+                rules = JSON.parse(val('cors'));
+            } catch (e) {
+                toast('CORS 规则不是合法 JSON', 'err');
+                return;
+            }
+            if (!Array.isArray(rules)) {
+                toast('CORS 规则必须是数组', 'err');
+                return;
+            }
             payload = { rules: rules };
         } else if (save.hasAttribute('data-set-lifecycle')) {
             section = 'lifecycle';

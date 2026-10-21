@@ -122,6 +122,11 @@ if ($method === 'PUT' && str_contains($query, 'partNumber=') && str_contains($qu
     exit;
 }
 if ($method === 'POST' && str_contains($query, 'uploadId=')) {
+    if ($path === '/complete-fail.bin') {
+        http_response_code(200);
+        echo '<Error><Code>InvalidPart</Code><Message>bad part</Message></Error>';
+        exit;
+    }
     echo '<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUploadResult>'
         . '<Location>http://localhost/stub</Location><Bucket>' . htmlspecialchars($bucket, ENT_XML1) . '</Bucket>'
         . '<Key>big.bin</Key><ETag>"etag-complete"</ETag></CompleteMultipartUploadResult>';
@@ -135,6 +140,12 @@ if ($method === 'DELETE' && str_contains($query, 'uploadId=')) {
 /* ------------------------------------------------ 对象级：复制 / 解冻
    必须排在通用桶级 PUT 之前，否则复制请求会被当成建桶。 */
 if ($method === 'PUT' && isset($_SERVER['HTTP_X_AMZ_COPY_SOURCE'])) {
+    if ($path === '/copy-fail.txt') {
+        // 真实 S3/COS 会用 200 + <Error> 表示复制失败（归档源等）
+        http_response_code(200);
+        echo '<Error><Code>InvalidObjectState</Code><Message>archived</Message></Error>';
+        exit;
+    }
     echo '<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult>'
         . '<ETag>"etag-copy"</ETag><LastModified>2026-01-04T00:00:00Z</LastModified></CopyObjectResult>';
     exit;

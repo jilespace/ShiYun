@@ -63,7 +63,8 @@ function csp_content(array $extraConnect = []): string
     $connect = ["'self'"];
     foreach ($extraConnect as $origin) {
         $origin = trim((string) $origin);
-        if ($origin !== '') {
+        // 只接受 scheme://host[:port] 形态，防止 ';' 等字符截断指令并注入
+        if ($origin !== '' && preg_match('/^https?:\/\/[A-Za-z0-9.*:_\[\]-]+$/', $origin) === 1) {
             $connect[] = $origin;
         }
     }

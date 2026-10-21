@@ -163,6 +163,11 @@ function object_account_save(int $userId, array $in, int $id = 0): int
     $secretKey = (string) ($in['secret_key'] ?? '');
     $token = trim((string) ($in['session_token'] ?? ''));
 
+    if (strlen($endpoint) > 255 || strlen($accessKey) > 255
+        || strlen($secretKey) > 255 || strlen($token) > 2048) {
+        throw new InvalidArgumentException('Endpoint、密钥或临时令牌过长。');
+    }
+
     if ($id > 0) {
         $existing = object_account_get($userId, $id);
         if ($existing === null) {
@@ -179,6 +184,9 @@ function object_account_save(int $userId, array $in, int $id = 0): int
         }
         if ($accessKey === '' || $secretKey === '') {
             throw new InvalidArgumentException('请填写 Access Key 与 Secret Key。');
+        }
+        if (strlen($accessKey) > 255 || strlen($secretKey) > 255 || strlen($token) > 2048) {
+            throw new InvalidArgumentException('密钥或临时令牌过长。');
         }
         q_update('object_accounts', [
             'name'          => $name,

@@ -1234,7 +1234,10 @@ function s3_parse_object_page(string $xml, string $prefix = ''): array
             if ($row['key'] !== '') {
                 $row['name'] = ($displayBase !== '' && str_starts_with($row['key'], $displayBase))
                     ? substr($row['key'], strlen($displayBase)) : $row['key'];
-                $out['objects'][] = $row;
+                // 键正好等于当前前缀（0 字节目录标记）不渲染成空名行
+                if ($row['name'] !== '') {
+                    $out['objects'][] = $row;
+                }
             }
         }
     }
@@ -1392,16 +1395,15 @@ function s3_purge_objects(array $config, string $bucket): array
     }
 
     $result = s3_delete_objects($config, $bucket, array_column($listed['objects'], 'key'));
-    if (!$result['ok']) {
-        return ['ok' => false, 'deleted' => 0, 'remaining' => true, 'message' => (string) $result['message']];
-    }
 
     // 删完再探一眼：超过 1000 个对象时还有剩余，界面据此提示再点一次
     $after = s3_list_objects($config, $bucket, 1);
 
     return [
-        'ok'        => true,
-        'deleted'   => (int) $result['deleted'],
+        'ok'        => (bool) $result['ok'],
+        'deleted'   => (int) ($result['deleted'] ?? 0),
+        'failed'    => (int) ($result['failed'] ?? 0),
+        'errors'    => $result['errors'] ?? [],
         'remaining' => $after['count'] > 0,
         'message'   => (string) $result['message'],
     ];
@@ -1460,6 +1462,20 @@ function s3_copy_object(array $config, string $bucket, string $source, string $t
         'payload_hash' => hash('sha256', ''),
     ]);
     if ((int) $res['status'] < 200 || (int) $res['status'] >= 300) {
+        return ['ok' => false, 'message' => s3_error_message($res, '复制对象失败')];
+    }
+
+    // 部分 S3 实现会用 200 + <Error> 表示复制失败（如归档源的 InvalidObjectState），
+    // 只看状态码会把「没复制成功」当成功，move 随后删源就是数据丢失。
+    $prev = libxml_use_internal_errors(true);
+    $doc = new DOMDocument();
+    $loaded = $doc->loadXML((string) $res['body'], LIBXML_NONET);
+    libxml_clear_errors();
+    libxml_use_internal_errors($prev);
+    $root = $loaded ? $doc->documentElement : null;
+    if ($root === null
+        || $root->localName !== 'CopyObjectResult'
+        || $doc->getElementsByTagName('Error')->length > 0) {
         return ['ok' => false, 'message' => s3_error_message($res, '复制对象失败')];
     }
     return ['ok' => true, 'message' => '已复制。'];
@@ -1521,7 +1537,9 @@ function s3_delete_subresource(array $config, string $bucket, string $sub): arra
         'payload_hash' => hash('sha256', ''),
     ]);
     $status = (int) $res['status'];
-    $ok = $status === 404 || ($status >= 200 && $status < 300);
+    // 只有「该配置不存在」的 404 才算幂等成功；桶不存在的 404 必须报错
+    $notFoundIsOk = $status === 404 && !str_contains((string) $res['body'], 'NoSuchBucket');
+    $ok = $notFoundIsOk || ($status >= 200 && $status < 300);
     return ['ok' => $ok, 'status' => $status, 'message' => $ok ? '已删除。' : s3_error_message($res, '删除失败')];
 }
 
@@ -1598,6 +1616,19 @@ function s3_multipart_complete(array $config, string $bucket, string $key, strin
         'timeout'      => 60,
     ]);
     if ((int) $res['status'] < 200 || (int) $res['status'] >= 300) {
+        return ['ok' => false, 'message' => s3_error_message($res, '完成分片上传失败')];
+    }
+
+    // 与 CopyObject 同理：200 + <Error> 不能算完成
+    $prev = libxml_use_internal_errors(true);
+    $doc = new DOMDocument();
+    $loaded = $doc->loadXML((string) $res['body'], LIBXML_NONET);
+    libxml_clear_errors();
+    libxml_use_internal_errors($prev);
+    $root = $loaded ? $doc->documentElement : null;
+    if ($root === null
+        || $root->localName !== 'CompleteMultipartUploadResult'
+        || $doc->getElementsByTagName('Error')->length > 0) {
         return ['ok' => false, 'message' => s3_error_message($res, '完成分片上传失败')];
     }
     return ['ok' => true, 'message' => '上传完成。'];
