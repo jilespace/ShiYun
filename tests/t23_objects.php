@@ -296,6 +296,67 @@ check(str_contains($js, 'objects.bucket_bind'), '前端可绑定桶');
 check(str_contains($js, 'objects.bucket_delete'), '前端可删桶');
 check(str_contains($js, 'objects.bucket_purge'), '前端可清空桶');
 
+echo "\n· 桶设置 XML\n";
+check(object_versioning_parse('<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>') === 'Enabled', '解析版本控制');
+check(str_contains(object_versioning_xml('Suspended'), '<Status>Suspended</Status>'), '生成版本控制');
+
+$site = object_website_parse('<WebsiteConfiguration><IndexDocument><Suffix>index.html</Suffix></IndexDocument></WebsiteConfiguration>');
+check($site['enabled'] === true && $site['index'] === 'index.html', '解析静态网站');
+check(str_contains(object_website_xml('index.html', '404.html'), '<Key>404.html</Key>'), '生成静态网站');
+
+$corsXml = object_cors_xml([[
+    'id' => 'site', 'origins' => ['http://localhost:15244'], 'methods' => ['GET', 'PUT'],
+    'headers' => ['*'], 'expose' => ['ETag'], 'max_age' => 600,
+]]);
+$rules = object_cors_parse($corsXml);
+check(count($rules) === 1 && $rules[0]['origins'][0] === 'http://localhost:15244', 'CORS 往返');
+check(object_cors_allows($rules, 'http://localhost:15244', ['GET', 'PUT']) === [true, []], 'CORS 放行判断');
+[$ok, $issues] = object_cors_allows($rules, 'https://evil.example', ['GET']);
+check($ok === false && $issues !== [], 'CORS 拒绝陌生来源');
+
+$merged = object_cors_merge_origin($rules, 'https://shiyun.example');
+[$ok2] = object_cors_allows($merged, 'https://shiyun.example', ['GET', 'PUT', 'HEAD']);
+check($ok2 === true && count($merged) === 2, '一键允许本站会追加规则并保留原规则');
+
+$life = object_lifecycle_xml([[
+    'id' => 'cold', 'prefix' => 'cold/', 'expire_days' => 365,
+    'transition_days' => 30, 'transition_class' => 'ARCHIVE', 'abort_days' => 7,
+]]);
+object_lifecycle_validate($life);
+$parsed = object_lifecycle_rules_parse($life);
+check($parsed[0]['expire_days'] === 365 && $parsed[0]['transition_class'] === 'ARCHIVE', '生命周期往返');
+
+$badXml = false;
+try { object_lifecycle_validate('<NotLifecycle/>'); } catch (InvalidArgumentException $e) { $badXml = true; }
+check($badXml, '非法生命周期根节点被拒');
+
+$tags = object_tagging_parse(object_tagging_xml([['key' => 'env', 'value' => 'prod']]));
+check($tags[0]['key'] === 'env' && $tags[0]['value'] === 'prod', '标签往返');
+
+$acl = object_acl_parse(
+    '<AccessControlPolicy><AccessControlList><Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group">'
+    . '<URI>http://acs.amazonaws.com/groups/global/AllUsers</URI></Grantee><Permission>READ</Permission></Grant></AccessControlList></AccessControlPolicy>'
+);
+check($acl['canned'] === 'public-read', '从 ACL 推断 public-read');
+
+$badRule = false;
+try { object_lifecycle_xml([['id' => 'empty', 'prefix' => '']]); } catch (InvalidArgumentException $e) { $badRule = true; }
+check($badRule, '生命周期规则缺少过期/转存储/清理分片被拒');
+
+$badClass2 = false;
+try {
+    object_lifecycle_xml([['id' => 'x', 'transition_days' => 5, 'transition_class' => 'NOPE']]);
+} catch (InvalidArgumentException $e) { $badClass2 = true; }
+check($badClass2, '生命周期转存储类型不合法被拒');
+
+$badCors = false;
+try { object_cors_xml([['origins' => [], 'methods' => ['GET']]]); } catch (InvalidArgumentException $e) { $badCors = true; }
+check($badCors, 'CORS 空来源被拒');
+
+$badCors2 = false;
+try { object_cors_xml([['origins' => ['https://a.example'], 'methods' => ['TRACE']]]); } catch (InvalidArgumentException $e) { $badCors2 = true; }
+check($badCors2, 'CORS 非白名单方法被拒');
+
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
 q_exec('DELETE FROM user_settings WHERE user_id IN (?, ?)', [$uid, $otherId]);
