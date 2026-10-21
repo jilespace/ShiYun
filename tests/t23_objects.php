@@ -233,6 +233,33 @@ check($search['folders'][0]['name'] === 'abc2026', 'CommonPrefixes 同样按路�
 $dirParse = s3_parse_object_page($searchXml, 'photos/');
 check($dirParse['objects'][2]['name'] === 'a b+c.jpg', '目录浏览（前缀以 / 结尾）显示名保持不变');
 
+echo "\n· 对象级协议\n";
+$head = s3_head_object($cfg, 'photos-1250000000', 'a.txt');
+check($head !== null && $head['size'] === 1024, 'HEAD 解析大小');
+check($head !== null && $head['storage_class'] === 'STANDARD_IA', 'HEAD 解析存储类型');
+check(s3_head_object($cfg, 'photos-1250000000', 'missing.txt') === null, 'HEAD 404 返回 null');
+
+$copy = s3_copy_object($cfg, 'photos-1250000000', 'a b+c.jpg', 'copied/中文.txt');
+check($copy['ok'] === true, '复制成功');
+$req = $requests(0);
+$headers = array_change_key_case((array) ($req['headers'] ?? []), CASE_LOWER);
+check(($headers['x-amz-copy-source'] ?? '') === '/photos-1250000000/a%20b%2Bc.jpg', '复制源键按路径段编码');
+
+$restore = s3_restore_object($cfg, 'photos-1250000000', 'cold.bin', 2);
+check($restore['ok'] === true, '解冻返回成功');
+$req = $requests(0);
+check(str_contains((string) ($req['body'] ?? ''), '<Days>2</Days>'), '解冻请求体带天数');
+
+$version = s3_get_subresource($cfg, 'photos-1250000000', 'versioning');
+check(in_array($version['status'], [200, 404], true), '子资源 GET 返回状态码');
+$put = s3_put_subresource($cfg, 'photos-1250000000', 'versioning', '<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>');
+check($put['ok'] === true, '子资源 PUT 成功');
+
+$err = s3_error_message(['status' => 400, 'body' => '<Error><Code>EntityTooLarge</Code></Error>', 'headers' => ''], '上传失败');
+check(str_contains($err, '单次上传上限'), '翻译 EntityTooLarge');
+$err2 = s3_error_message(['status' => 404, 'body' => '<Error><Code>NoSuchCORSConfiguration</Code></Error>', 'headers' => ''], '读取失败');
+check(str_contains($err2, '未配置 CORS'), '翻译 NoSuchCORSConfiguration');
+
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
 q_exec('DELETE FROM user_settings WHERE user_id IN (?, ?)', [$uid, $otherId]);

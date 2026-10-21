@@ -57,8 +57,46 @@ if ($method === 'GET' && $bucket === '') {
     exit;
 }
 
+/* -------------------------------------------------- 桶级：子资源读写
+   必须排在桶级 HEAD/PUT/DELETE 之前：PUT ?versioning 不能被当成建桶，
+   DELETE ?website 也不能被当成删桶。 */
+if ($method === 'GET' && preg_match('/\?(versioning|cors|lifecycle|website|tagging|acl|policy)=?/', $uri)) {
+    if (str_contains($query, 'versioning')) {
+        echo '<?xml version="1.0" encoding="UTF-8"?><VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>';
+        exit;
+    }
+    if (str_contains($query, 'policy')) {
+        http_response_code(404);
+        echo '<Error><Code>NoSuchBucketPolicy</Code><Message>no policy</Message></Error>';
+        exit;
+    }
+    http_response_code(404);
+    echo '<Error><Code>NoSuchConfiguration</Code><Message>not configured</Message></Error>';
+    exit;
+}
+if ($method === 'PUT' && preg_match('/\?(versioning|cors|lifecycle|website|tagging|acl)=?/', $uri)) {
+    http_response_code(200);
+    exit;
+}
+if ($method === 'DELETE' && preg_match('/\?(versioning|cors|lifecycle|website|tagging|acl)=?/', $uri)) {
+    http_response_code(204);
+    exit;
+}
+
 /* ------------------------------------------------------------ 桶级：探测 */
 if ($method === 'HEAD') {
+    if ($path !== '/') {
+        if ($path === '/missing.txt') {
+            http_response_code(404);
+            exit;
+        }
+        header('Content-Length: 1024');
+        header('Content-Type: text/plain');
+        header('ETag: "etag-head"');
+        header('x-amz-storage-class: STANDARD_IA');
+        http_response_code(200);
+        exit;
+    }
     if ($bucket === 'missing-bucket') {
         http_response_code(404);
     } elseif ($bucket === 'denied-bucket') {
@@ -66,6 +104,19 @@ if ($method === 'HEAD') {
     } else {
         http_response_code(200);
     }
+    exit;
+}
+
+/* ------------------------------------------------ 对象级：复制 / 解冻
+   必须排在通用桶级 PUT 之前，否则复制请求会被当成建桶。 */
+if ($method === 'PUT' && isset($_SERVER['HTTP_X_AMZ_COPY_SOURCE'])) {
+    echo '<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult>'
+        . '<ETag>"etag-copy"</ETag><LastModified>2026-01-04T00:00:00Z</LastModified></CopyObjectResult>';
+    exit;
+}
+
+if ($method === 'POST' && str_contains($query, 'restore')) {
+    http_response_code(202);
     exit;
 }
 

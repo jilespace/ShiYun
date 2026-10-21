@@ -900,6 +900,15 @@ function s3_error_message(array $res, string $fallback): string
         'SignatureDoesNotMatch'    => '签名不匹配，请核对 Secret Key。',
         'PathStyleDomainForbidden' => '该端点不接受 path-style 寻址，请确认 endpoint 填的是域名形式。',
         'RequestTimeTooSkewed'     => '本机时间与服务器偏差过大，请校准系统时间。',
+        'EntityTooLarge'             => '对象超过单次上传上限，请改用分片上传。',
+        'InvalidStorageClass'        => '该存储类型在此服务商不可用。',
+        'CORSNotAllowed'             => '桶的 CORS 未放行本站，请先配置 CORS。',
+        'NoSuchCORSConfiguration'    => '桶未配置 CORS。',
+        'NoSuchLifecycleConfiguration' => '桶未配置生命周期。',
+        'NoSuchBucketPolicy'         => '桶未设置策略。',
+        'InvalidPart'                => '分片无效，请重新上传该分片。',
+        'InvalidPartOrder'           => '分片顺序不正确，请重新完成上传。',
+        'NoSuchUpload'               => '分片上传不存在或已过期，请重新开始。',
     ];
 
     if ($code !== '' && isset($known[$code])) {
@@ -1348,4 +1357,118 @@ function s3_purge_objects(array $config, string $bucket): array
         'remaining' => $after['count'] > 0,
         'message'   => (string) $result['message'],
     ];
+}
+
+/* -------------------------------------------------------- 对象级操作 */
+
+/** 把 cURL 返回的原始响应头解析成小写键的数组 */
+function s3_response_headers(string $raw): array
+{
+    $out = [];
+    foreach (preg_split('/\r?\n/', $raw) ?: [] as $line) {
+        $pos = strpos($line, ':');
+        if ($pos === false) {
+            continue;
+        }
+        $out[strtolower(trim(substr($line, 0, $pos)))] = trim(substr($line, $pos + 1));
+    }
+    return $out;
+}
+
+/** HEAD 对象；404 返回 null */
+function s3_head_object(array $config, string $bucket, string $key): ?array
+{
+    $res = s3_request(s3_bucket_config($config, $bucket), 'HEAD', $key, [
+        'payload_hash' => hash('sha256', ''),
+    ]);
+    if ((int) $res['status'] === 404) {
+        return null;
+    }
+    if ((int) $res['status'] < 200 || (int) $res['status'] >= 300) {
+        throw new RuntimeException(s3_error_message($res, '读取对象信息失败'));
+    }
+    $h = s3_response_headers((string) $res['headers']);
+    return [
+        'size'          => (int) ($h['content-length'] ?? 0),
+        'content_type'  => (string) ($h['content-type'] ?? ''),
+        'etag'          => (string) ($h['etag'] ?? ''),
+        'last_modified' => (string) ($h['last-modified'] ?? ''),
+        'storage_class' => (string) ($h['x-amz-storage-class'] ?? 'STANDARD'),
+        'restore'       => (string) ($h['x-amz-restore'] ?? ''),
+    ];
+}
+
+function s3_copy_object(array $config, string $bucket, string $source, string $target, ?string $storageClass = null): array
+{
+    $headers = [
+        'x-amz-copy-source'        => s3_copy_source($bucket, $source),
+        'x-amz-metadata-directive' => 'COPY',
+    ];
+    if ($storageClass !== null && $storageClass !== '') {
+        $headers['x-amz-storage-class'] = $storageClass;
+    }
+    $res = s3_request(s3_bucket_config($config, $bucket), 'PUT', $target, [
+        'headers'      => $headers,
+        'payload_hash' => hash('sha256', ''),
+    ]);
+    if ((int) $res['status'] < 200 || (int) $res['status'] >= 300) {
+        return ['ok' => false, 'message' => s3_error_message($res, '复制对象失败')];
+    }
+    return ['ok' => true, 'message' => '已复制。'];
+}
+
+function s3_restore_object(array $config, string $bucket, string $key, int $days, string $tier = 'Standard'): array
+{
+    $days = max(1, min(30, $days));
+    $tier = in_array($tier, ['Standard', 'Bulk', 'Expedited'], true) ? $tier : 'Standard';
+    $xml = '<RestoreRequest><Days>' . $days . '</Days><Tier>' . $tier . '</Tier></RestoreRequest>';
+    $res = s3_request(s3_bucket_config($config, $bucket), 'POST', $key, [
+        'query'        => ['restore' => ''],
+        'body'         => $xml,
+        'payload_hash' => hash('sha256', $xml),
+        'content_type' => 'application/xml',
+    ]);
+    if ((int) $res['status'] < 200 || (int) $res['status'] >= 300) {
+        return ['ok' => false, 'message' => s3_error_message($res, '解冻失败')];
+    }
+    return ['ok' => true, 'message' => '已提交解冻，归档对象通常需要数分钟到数小时。'];
+}
+
+/* ------------------------------------------------------------ 子资源 */
+
+function s3_get_subresource(array $config, string $bucket, string $sub, array $query = []): array
+{
+    $res = s3_request(s3_bucket_config($config, $bucket), 'GET', '', [
+        'query'        => [$sub => ''] + $query,
+        'payload_hash' => hash('sha256', ''),
+    ]);
+    return [
+        'status'  => (int) $res['status'],
+        'body'    => (string) $res['body'],
+        'headers' => (string) $res['headers'],
+    ];
+}
+
+function s3_put_subresource(array $config, string $bucket, string $sub, string $xml, array $headers = []): array
+{
+    $res = s3_request(s3_bucket_config($config, $bucket), 'PUT', '', [
+        'query'        => [$sub => ''],
+        'body'         => $xml,
+        'payload_hash' => hash('sha256', $xml),
+        'content_type' => 'application/xml',
+        'headers'      => $headers,
+    ]);
+    $ok = (int) $res['status'] >= 200 && (int) $res['status'] < 300;
+    return ['ok' => $ok, 'status' => (int) $res['status'], 'message' => $ok ? '已保存。' : s3_error_message($res, '保存失败')];
+}
+
+function s3_delete_subresource(array $config, string $bucket, string $sub): array
+{
+    $res = s3_request(s3_bucket_config($config, $bucket), 'DELETE', '', [
+        'query'        => [$sub => ''],
+        'payload_hash' => hash('sha256', ''),
+    ]);
+    $status = (int) $res['status'];
+    $ok = $status === 404 || ($status >= 200 && $status < 300);
+    return ['ok' => $ok, 'status' => $status, 'message' => $ok ? '已删除。' : s3_error_message($res, '删除失败')];
 }
