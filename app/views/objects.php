@@ -105,6 +105,8 @@ $initial = (string) json_encode($config, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG |
                         </div>
                     </div>
 
+                    <p class="mhint" data-upload-note></p>
+
                     <div class="objsel" data-obj-selection hidden>
                         <span data-obj-selected-count></span>
                         <button class="chipbtn chipbtn--danger" type="button" data-obj-delete-selected>删除所选</button>

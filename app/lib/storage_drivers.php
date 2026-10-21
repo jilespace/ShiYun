@@ -1476,3 +1476,89 @@ function s3_delete_subresource(array $config, string $bucket, string $sub): arra
     $ok = $status === 404 || ($status >= 200 && $status < 300);
     return ['ok' => $ok, 'status' => $status, 'message' => $ok ? '已删除。' : s3_error_message($res, '删除失败')];
 }
+
+/* ------------------------------------------------------------ Multipart */
+
+function s3_multipart_init(
+    array $config,
+    string $bucket,
+    string $key,
+    ?string $storageClass = null,
+    ?string $contentType = null
+): string {
+    $headers = [];
+    if ($storageClass !== null && $storageClass !== '') {
+        $headers['x-amz-storage-class'] = $storageClass;
+    }
+    if ($contentType !== null && $contentType !== '') {
+        $headers['content-type'] = $contentType;
+    }
+    $res = s3_request(s3_bucket_config($config, $bucket), 'POST', $key, [
+        'query'        => ['uploads' => ''],
+        'headers'      => $headers,
+        'payload_hash' => hash('sha256', ''),
+    ]);
+    if ((int) $res['status'] < 200 || (int) $res['status'] >= 300) {
+        throw new RuntimeException(s3_error_message($res, '初始化分片上传失败'));
+    }
+    $prev = libxml_use_internal_errors(true);
+    $doc = new DOMDocument();
+    $ok = $doc->loadXML((string) $res['body'], LIBXML_NONET);
+    libxml_clear_errors();
+    libxml_use_internal_errors($prev);
+    if (!$ok) {
+        throw new RuntimeException('无法解析分片上传响应。');
+    }
+    $nodes = $doc->getElementsByTagName('UploadId');
+    if ($nodes->length === 0) {
+        throw new RuntimeException('分片上传响应缺少 UploadId。');
+    }
+    return $nodes->item(0)->textContent;
+}
+
+function s3_multipart_part_url(array $config, string $bucket, string $key, string $uploadId, int $partNumber, int $ttl = 3600): string
+{
+    $partNumber = max(1, min(10000, $partNumber));
+    return s3_presign_url(
+        s3_bucket_config($config, $bucket),
+        'PUT',
+        $key,
+        $ttl,
+        ['partNumber' => (string) $partNumber, 'uploadId' => $uploadId]
+    );
+}
+
+function s3_multipart_complete(array $config, string $bucket, string $key, string $uploadId, array $parts): array
+{
+    $xml = '<CompleteMultipartUpload>';
+    foreach ($parts as $part) {
+        $number = (int) ($part['part_number'] ?? 0);
+        $etag = (string) ($part['etag'] ?? '');
+        if ($number < 1 || $number > 10000 || $etag === '') {
+            throw new InvalidArgumentException('分片编号或 ETag 不合法。');
+        }
+        $xml .= '<Part><PartNumber>' . $number . '</PartNumber><ETag>'
+            . object_xml_escape($etag) . '</ETag></Part>';
+    }
+    $xml .= '</CompleteMultipartUpload>';
+
+    $res = s3_request(s3_bucket_config($config, $bucket), 'POST', $key, [
+        'query'        => ['uploadId' => $uploadId],
+        'body'         => $xml,
+        'payload_hash' => hash('sha256', $xml),
+        'content_type' => 'application/xml',
+        'timeout'      => 60,
+    ]);
+    if ((int) $res['status'] < 200 || (int) $res['status'] >= 300) {
+        return ['ok' => false, 'message' => s3_error_message($res, '完成分片上传失败')];
+    }
+    return ['ok' => true, 'message' => '上传完成。'];
+}
+
+function s3_multipart_abort(array $config, string $bucket, string $key, string $uploadId): void
+{
+    s3_request(s3_bucket_config($config, $bucket), 'DELETE', $key, [
+        'query'        => ['uploadId' => $uploadId],
+        'payload_hash' => hash('sha256', ''),
+    ]);
+}

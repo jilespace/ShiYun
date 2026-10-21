@@ -341,3 +341,235 @@ function objects_list(): void
         'boundBy'   => object_bound_by((int) $account['user_id'], $bucket),
     ]);
 }
+
+/* ------------------------------------------------------------ 上传与 CORS */
+
+function objects_key_or_fail(): string
+{
+    $key = (string) input('key', '');
+    if (!object_key_valid($key)) {
+        json_fail('对象键不合法。');
+    }
+    return $key;
+}
+
+function objects_upload_sign(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    objects_assert_mutable($userId, $bucket);
+    $key = objects_key_or_fail();
+
+    try {
+        $class = object_storage_class_or_fail((string) input('storage_class', ''));
+    } catch (InvalidArgumentException $e) {
+        json_fail($e->getMessage(), 422, 'invalid');
+    }
+
+    // Content-Type / 存储类型必须作为签名头一起签：S3 会对预签名 URL 里
+    // 未签名的 x-amz-* 头判签名不匹配，不能只让浏览器“顺带”带上。
+    $contentType = trim((string) input('content_type', '')) ?: 'application/octet-stream';
+    $headers = ['content-type' => $contentType];
+    if ($class !== '') {
+        $headers['x-amz-storage-class'] = $class;
+    }
+    $url = s3_presign_url(
+        object_bucket_config($account, $bucket),
+        'PUT',
+        $key,
+        900,
+        [],
+        $headers
+    );
+    json_ok([
+        'url'     => $url,
+        'key'     => $key,
+        'headers' => $headers,
+        'expires' => 900,
+    ]);
+}
+
+function objects_upload_init(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    objects_assert_mutable($userId, $bucket);
+    $key = objects_key_or_fail();
+
+    $size = max(0, input_int('size', 0));
+    $partSize = max(8 * 1024 * 1024, (int) ceil($size / 10000));
+    $partSize = (int) (ceil($partSize / 1024 / 1024) * 1024 * 1024);
+
+    try {
+        $class = object_storage_class_or_fail((string) input('storage_class', ''));
+        $contentType = trim((string) input('content_type', '')) ?: 'application/octet-stream';
+        $uploadId = s3_multipart_init(
+            object_account_config($account),
+            $bucket,
+            $key,
+            $class !== '' ? $class : null,
+            $contentType
+        );
+    } catch (InvalidArgumentException $e) {
+        json_fail($e->getMessage(), 422, 'invalid');
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    }
+
+    json_ok(['upload_id' => $uploadId, 'part_size' => $partSize, 'key' => $key]);
+}
+
+function objects_upload_part(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    objects_assert_mutable($userId, $bucket);
+    $key = objects_key_or_fail();
+    $uploadId = (string) input('upload_id', '');
+    if ($uploadId === '') {
+        json_fail('缺少 upload_id。');
+    }
+    $partNumber = input_int('part_number', 0);
+    if ($partNumber < 1 || $partNumber > 10000) {
+        json_fail('分片编号不合法。');
+    }
+
+    $url = s3_multipart_part_url(
+        object_account_config($account),
+        $bucket,
+        $key,
+        $uploadId,
+        $partNumber,
+        3600
+    );
+    json_ok(['url' => $url]);
+}
+
+function objects_upload_complete(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    objects_assert_mutable($userId, $bucket);
+    $key = objects_key_or_fail();
+    $uploadId = (string) input('upload_id', '');
+    $parts = input('parts', []);
+    if ($uploadId === '' || !is_array($parts) || $parts === []) {
+        json_fail('分片列表不完整。');
+    }
+
+    try {
+        $result = s3_multipart_complete(object_account_config($account), $bucket, $key, $uploadId, $parts);
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    } catch (InvalidArgumentException $e) {
+        json_fail($e->getMessage(), 422, 'invalid');
+    }
+    if (!$result['ok']) {
+        json_fail((string) $result['message'], 502, 's3_error');
+    }
+
+    activity_log($userId, 'object.upload', null, $bucket . ' / ' . mb_substr($key, 0, 120));
+    json_ok($result);
+}
+
+function objects_upload_abort(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    objects_assert_mutable($userId, $bucket);
+    $key = objects_key_or_fail();
+    $uploadId = (string) input('upload_id', '');
+    if ($uploadId === '') {
+        json_fail('缺少 upload_id。');
+    }
+    s3_multipart_abort(object_account_config($account), $bucket, $key, $uploadId);
+    json_ok(['aborted' => true]);
+}
+
+function objects_cors_check(): void
+{
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    $origin = object_request_origin();
+
+    $res = s3_get_subresource(object_account_config($account), $bucket, 'cors');
+    if ((int) $res['status'] === 404) {
+        json_ok(['ok' => false, 'origin' => $origin, 'issues' => ['桶未配置 CORS']]);
+    }
+    if ((int) $res['status'] < 200 || (int) $res['status'] >= 300) {
+        json_fail(s3_error_message($res, '读取 CORS 失败'), 502, 's3_error');
+    }
+
+    $rules = object_cors_parse((string) $res['body']);
+    [$ok, $issues] = object_cors_allows($rules, $origin, ['GET', 'PUT', 'HEAD']);
+    json_ok(['ok' => $ok, 'origin' => $origin, 'issues' => $issues]);
+}
+
+function objects_cors_allow(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    objects_assert_mutable($userId, $bucket);
+
+    $origin = object_request_origin();
+    $res = s3_get_subresource(object_account_config($account), $bucket, 'cors');
+    $rules = [];
+    if ((int) $res['status'] >= 200 && (int) $res['status'] < 300) {
+        $rules = object_cors_parse((string) $res['body']);
+    } elseif ((int) $res['status'] !== 404) {
+        json_fail(s3_error_message($res, '读取 CORS 失败'), 502, 's3_error');
+    }
+
+    $rules = object_cors_merge_origin($rules, $origin);
+    try {
+        $xml = object_cors_xml($rules);
+    } catch (InvalidArgumentException $e) {
+        json_fail($e->getMessage(), 422, 'invalid');
+    }
+    $put = s3_put_subresource(object_account_config($account), $bucket, 'cors', $xml);
+    if (!$put['ok']) {
+        json_fail((string) $put['message'], 502, 's3_error');
+    }
+
+    activity_log($userId, 'object.cors_allow', null, $bucket . ' ← ' . $origin);
+    json_ok(['ok' => true, 'origin' => $origin, 'rules' => $rules]);
+}

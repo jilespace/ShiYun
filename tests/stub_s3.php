@@ -107,6 +107,31 @@ if ($method === 'HEAD') {
     exit;
 }
 
+/* ------------------------------------------------------------ 分片上传 */
+if ($method === 'POST' && str_contains($query, 'uploads')) {
+    echo '<?xml version="1.0" encoding="UTF-8"?><InitiateMultipartUploadResult>'
+        . '<Bucket>' . htmlspecialchars($bucket, ENT_XML1) . '</Bucket>'
+        . '<Key>big.bin</Key><UploadId>stub-upload-1</UploadId>'
+        . '</InitiateMultipartUploadResult>';
+    exit;
+}
+if ($method === 'PUT' && str_contains($query, 'partNumber=') && str_contains($query, 'uploadId=')) {
+    preg_match('/partNumber=(\d+)/', $query, $m);
+    header('ETag: "part-' . ($m[1] ?? '1') . '"');
+    http_response_code(200);
+    exit;
+}
+if ($method === 'POST' && str_contains($query, 'uploadId=')) {
+    echo '<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUploadResult>'
+        . '<Location>http://localhost/stub</Location><Bucket>' . htmlspecialchars($bucket, ENT_XML1) . '</Bucket>'
+        . '<Key>big.bin</Key><ETag>"etag-complete"</ETag></CompleteMultipartUploadResult>';
+    exit;
+}
+if ($method === 'DELETE' && str_contains($query, 'uploadId=')) {
+    http_response_code(204);
+    exit;
+}
+
 /* ------------------------------------------------ 对象级：复制 / 解冻
    必须排在通用桶级 PUT 之前，否则复制请求会被当成建桶。 */
 if ($method === 'PUT' && isset($_SERVER['HTTP_X_AMZ_COPY_SOURCE'])) {

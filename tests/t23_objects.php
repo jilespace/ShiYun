@@ -370,6 +370,33 @@ check(
     '进入桶时重置搜索状态'
 );
 
+echo "\n· 预签名与分片\n";
+$sign = s3_presign_url($cfg, 'PUT', 'photos/a b.jpg', 99999);
+check(str_contains($sign, 'X-Amz-Expires=3600'), 'TTL 上限被钳制到 3600');
+check(str_contains($sign, 'photos/a%20b.jpg'), '预签名路径正确编码');
+$short = s3_presign_url($cfg, 'GET', 'a.txt', 5);
+check(str_contains($short, 'X-Amz-Expires=60'), 'TTL 下限被抬到 60');
+
+$multi = s3_multipart_part_url($cfg, 'photos-1250000000', 'big.bin', 'uid+/=', 7, 600);
+check(str_contains($multi, 'partNumber=7'), '分片 URL 带 partNumber');
+check(str_contains($multi, 'uploadId=uid%2B%2F%3D'), '分片 URL 编码 uploadId');
+
+$uploadId = s3_multipart_init($cfg, 'photos-1250000000', 'big.bin', 'STANDARD_IA', 'application/octet-stream');
+check($uploadId === 'stub-upload-1', '初始化分片解析 UploadId');
+$initReq = $requests(0);
+$initHeaders = array_change_key_case((array) ($initReq['headers'] ?? []), CASE_LOWER);
+check(($initHeaders['content-type'] ?? '') === 'application/octet-stream', '初始化分片带 Content-Type');
+check(($initHeaders['x-amz-storage-class'] ?? '') === 'STANDARD_IA', '初始化分片带存储类型');
+check(str_contains((string) ($initReq['authHeader'] ?? ''), 'content-type')
+    && str_contains((string) ($initReq['authHeader'] ?? ''), 'x-amz-storage-class'),
+    '初始化分片的 Content-Type 与存储类型参与签名');
+$done = s3_multipart_complete($cfg, 'photos-1250000000', 'big.bin', $uploadId, [
+    ['part_number' => 1, 'etag' => '"etag-1"'],
+]);
+check($done['ok'] === true, '完成分片上传');
+s3_multipart_abort($cfg, 'photos-1250000000', 'big.bin', $uploadId);
+check(true, '放弃分片不抛异常');
+
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
 q_exec('DELETE FROM user_settings WHERE user_id IN (?, ?)', [$uid, $otherId]);

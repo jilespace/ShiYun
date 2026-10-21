@@ -576,6 +576,160 @@
         loadObjects();
     });
 
+    /* ---------------------------------------------------------- 上传 */
+
+    const PART_THRESHOLD = 64 * 1024 * 1024;
+
+    function xhrPut(url, body, headers, onProgress) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('PUT', url, true);
+            Object.entries(headers || {}).forEach(([k, v]) => xhr.setRequestHeader(k, v));
+            xhr.upload.onprogress = (e) => {
+                if (onProgress && e.lengthComputable) onProgress(e.loaded, e.total);
+            };
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    resolve(xhr.getResponseHeader('ETag') || '');
+                } else {
+                    reject(new Error('上传失败（HTTP ' + xhr.status + '）'));
+                }
+            };
+            xhr.onerror = () => reject(new Error('网络错误或 CORS 拒绝'));
+            xhr.send(body);
+        });
+    }
+
+    async function ensureCors() {
+        const data = await api('objects.cors_check', { account: state.account, bucket: state.bucket }, { method: 'GET' });
+        if (data.ok) return true;
+        const allow = await SY.confirm(
+            '桶的 CORS 未放行本站',
+            (data.issues || []).join('；') + '。是否把 ' + data.origin + ' 加入该桶的 CORS？',
+            '一键允许本站',
+            false
+        );
+        if (!allow) return false;
+        await api('objects.cors_allow', { account: state.account, bucket: state.bucket });
+        toast('已写入 CORS 规则');
+        return true;
+    }
+
+    function selectedStorageClass() {
+        return $('[data-upload-class]')?.value || '';
+    }
+
+    async function uploadSingle(file, key, progress) {
+        const sign = await api('objects.upload_sign', {
+            account: state.account, bucket: state.bucket, key: key,
+            storage_class: selectedStorageClass(),
+            content_type: file.type || 'application/octet-stream',
+        });
+        await xhrPut(sign.url, file, sign.headers, progress);
+    }
+
+    async function uploadMultipart(file, key, progress) {
+        const init = await api('objects.upload_init', {
+            account: state.account, bucket: state.bucket, key: key, size: file.size,
+            storage_class: selectedStorageClass(),
+            content_type: file.type || 'application/octet-stream',
+        });
+        const partSize = Number(init.part_size) || 8 * 1024 * 1024;
+        const total = Math.ceil(file.size / partSize) || 1;
+        const parts = new Array(total);
+        let doneBytes = 0;
+        let next = 1;
+
+        async function worker() {
+            while (next <= total) {
+                const partNumber = next++;
+                const start = (partNumber - 1) * partSize;
+                const blob = file.slice(start, Math.min(start + partSize, file.size));
+                let etag = '';
+                let attempt = 0;
+                while (!etag && attempt < 3) {
+                    attempt++;
+                    try {
+                        const sign = await api('objects.upload_part', {
+                            account: state.account, bucket: state.bucket, key: key,
+                            upload_id: init.upload_id, part_number: partNumber,
+                        });
+                        etag = await xhrPut(sign.url, blob, {}, (loaded) => {
+                            progress(doneBytes + loaded, file.size);
+                        });
+                    } catch (err) {
+                        if (attempt >= 3) throw err;
+                    }
+                }
+                if (!etag) throw new Error('分片 ' + partNumber + ' 没有返回 ETag');
+                parts[partNumber - 1] = { part_number: partNumber, etag: etag };
+                doneBytes += blob.size;
+                progress(doneBytes, file.size);
+            }
+        }
+
+        try {
+            await Promise.all([worker(), worker(), worker()]);
+            await api('objects.upload_complete', {
+                account: state.account, bucket: state.bucket, key: key,
+                upload_id: init.upload_id, parts: parts.filter(Boolean),
+            });
+        } catch (err) {
+            await api('objects.upload_abort', {
+                account: state.account, bucket: state.bucket, key: key, upload_id: init.upload_id,
+            }).catch(() => {});
+            throw err;
+        }
+    }
+
+    async function uploadFiles(files) {
+        if (!files.length || !state.bucket) return;
+        let corsOk = false;
+        try {
+            corsOk = await ensureCors();
+        } catch (err) {
+            toast(err.message, 'err');
+            return;
+        }
+        if (!corsOk) return;
+        for (const file of Array.from(files)) {
+            const key = state.prefix + file.name;
+            const note = $('[data-upload-note]');
+            if (note) note.textContent = '正在上传 ' + file.name;
+            try {
+                if (file.size > PART_THRESHOLD) {
+                    await uploadMultipart(file, key, (loaded, total) => {
+                        if (note) note.textContent = '上传 ' + file.name + ' · ' + Math.round(loaded / total * 100) + '%';
+                    });
+                } else {
+                    await uploadSingle(file, key, (loaded, total) => {
+                        if (note) note.textContent = '上传 ' + file.name + ' · ' + Math.round(loaded / total * 100) + '%';
+                    });
+                }
+                toast('已上传 ' + file.name);
+            } catch (err) {
+                toast(file.name + '：' + err.message, 'err');
+            }
+        }
+        loadObjects();
+    }
+
+    $('[data-obj-upload]')?.addEventListener('click', () => el.uploadInput?.click());
+    el.uploadInput?.addEventListener('change', () => {
+        uploadFiles(el.uploadInput.files);
+        el.uploadInput.value = '';
+    });
+
+    document.addEventListener('dragover', (e) => {
+        if (!state.bucket || !el.detailView || el.detailView.hidden) return;
+        e.preventDefault();
+    });
+    document.addEventListener('drop', (e) => {
+        if (!state.bucket || !el.detailView || el.detailView.hidden) return;
+        e.preventDefault();
+        if (e.dataTransfer && e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+    });
+
     renderAccounts();
 
     // 首屏加载：函数由后续任务定义；这里只负责在定义就绪后调用一次
