@@ -14,7 +14,7 @@ if (!defined('BASE_PATH')) {
  * 「缺了什么就补什么」的判定在 db.php 的 db_migrate() 里，靠每次请求核对
  * information_schema 快照完成——不依赖这个号，所以忘了加一也不会漏迁移。
  */
-const SCHEMA_VERSION = 17;
+const SCHEMA_VERSION = 18;
 
 /** @return list<string> */
 function schema_statements(): array
@@ -468,6 +468,23 @@ function schema_statements(): array
             UNIQUE KEY uk_direct_token (token),
             KEY idx_direct_user (user_id, created_at),
             KEY idx_direct_node (node_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL;
+
+    $sql[] = <<<SQL
+        CREATE TABLE IF NOT EXISTS object_accounts (
+            id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            user_id       BIGINT UNSIGNED NOT NULL,
+            name          VARCHAR(64)     NOT NULL,
+            provider      ENUM('cos','s3') NOT NULL DEFAULT 'cos',
+            endpoint      VARCHAR(255)    NOT NULL,
+            region        VARCHAR(64)     NOT NULL,
+            access_key    VARCHAR(255)    NOT NULL,
+            secret_key    VARCHAR(255)    NOT NULL,
+            session_token VARCHAR(2048)   NULL,
+            created_at    DATETIME        NOT NULL,
+            PRIMARY KEY (id),
+            KEY idx_objacct_user (user_id, id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL;
 

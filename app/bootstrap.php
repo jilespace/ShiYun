@@ -65,6 +65,8 @@ require BASE_PATH . '/app/lib/nodes.php';
 require BASE_PATH . '/app/lib/locations.php';
 require BASE_PATH . '/app/lib/storage.php';
 require BASE_PATH . '/app/lib/storage_drivers.php';
+require BASE_PATH . '/app/lib/object_store.php';
+require BASE_PATH . '/app/lib/object_settings.php';
 require BASE_PATH . '/app/lib/activity.php';
 require BASE_PATH . '/app/lib/ooxml.php';
 require BASE_PATH . '/app/lib/archive.php';
