@@ -660,3 +660,135 @@ function objects_restore(): void
     activity_log($userId, 'object.restore', null, $bucket . ' / ' . mb_substr($key, 0, 120));
     json_ok($result);
 }
+
+function objects_copy(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    objects_assert_mutable($userId, $bucket);
+
+    $source = ltrim((string) input('source', ''), '/');
+    $target = ltrim((string) input('target', ''), '/');
+    $mode = (string) input('mode', 'copy');
+    if (!object_key_valid($source) || !object_key_valid($target)) {
+        json_fail('源或目标对象键不合法。');
+    }
+    if ($source === $target) {
+        json_fail('源和目标是同一个对象。');
+    }
+    if (!in_array($mode, ['copy', 'move'], true)) {
+        json_fail('不支持的复制模式。');
+    }
+
+    try {
+        $meta = s3_head_object(object_account_config($account), $bucket, $source);
+        if ($meta === null) {
+            json_fail('源对象不存在。', 404, 'not_found');
+        }
+        if ((int) $meta['size'] > 5 * 1024 * 1024 * 1024) {
+            json_fail('超过 5 GiB 的对象暂不支持复制（Multipart Copy 未实现）。', 422, 'too_large');
+        }
+        $class = object_storage_class_or_fail((string) input('storage_class', ''));
+        $result = s3_copy_object(
+            object_account_config($account),
+            $bucket,
+            $source,
+            $target,
+            $class !== '' ? $class : null
+        );
+        if (!$result['ok']) {
+            json_fail((string) $result['message'], 502, 's3_error');
+        }
+        if ($mode === 'move') {
+            $deleted = s3_delete_object(object_account_config($account), $bucket, $source);
+            if (!$deleted['ok']) {
+                json_fail('复制成功，但删除源对象失败：' . $deleted['message'], 502, 's3_error');
+            }
+        }
+    } catch (InvalidArgumentException $e) {
+        json_fail($e->getMessage(), 422, 'invalid');
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    }
+
+    activity_log($userId, 'object.copy', null, $bucket . ' / ' . mb_substr($source, 0, 80) . ' → ' . mb_substr($target, 0, 80));
+    json_ok(['message' => $mode === 'move' ? '已移动。' : '已复制。', 'target' => $target]);
+}
+
+function objects_delete(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    objects_assert_mutable($userId, $bucket);
+
+    $keys = input('keys', []);
+    if (!is_array($keys)) {
+        json_fail('keys 必须是数组。');
+    }
+    $keys = array_values(array_filter(array_map('strval', $keys), static fn (string $k): bool => object_key_valid($k)));
+    if ($keys === []) {
+        json_fail('没有要删除的对象。');
+    }
+    if (count($keys) > 1000) {
+        json_fail('一次最多删除 1000 个对象。', 422, 'too_large');
+    }
+
+    try {
+        $result = s3_delete_objects(object_account_config($account), $bucket, $keys);
+    } catch (RuntimeException $e) {
+        json_fail($e->getMessage(), 502, 's3_error');
+    }
+    if (!$result['ok']) {
+        json_fail((string) $result['message'], 502, 's3_error');
+    }
+
+    activity_log($userId, 'object.delete', null, $bucket . '（' . count($keys) . ' 个对象）');
+    json_ok($result);
+}
+
+function objects_mkdir(): void
+{
+    require_method('POST');
+    require_csrf();
+    $userId = require_auth_api();
+    $account = objects_account();
+    $bucket = strtolower(trim((string) input('bucket', '')));
+    if (!s3_bucket_name_valid($bucket)) {
+        json_fail('桶名不合法。');
+    }
+    objects_assert_mutable($userId, $bucket);
+
+    $prefix = (string) input('prefix', '');
+    $name = trim((string) input('name', ''));
+    if ($name === '' || mb_strlen($name) > 255 || preg_match('/[\x00-\x1F\x7F]/', $name)) {
+        json_fail('文件夹名称不合法。');
+    }
+    $key = object_key_join($prefix, $name) . '/';
+    if (!object_key_valid($key)) {
+        json_fail('对象键不合法。');
+    }
+
+    $res = s3_request(object_bucket_config($account, $bucket), 'PUT', $key, [
+        'body'         => '',
+        'payload_hash' => hash('sha256', ''),
+        'content_type' => 'application/x-directory',
+    ]);
+    if ((int) $res['status'] < 200 || (int) $res['status'] >= 300) {
+        json_fail(s3_error_message($res, '新建文件夹失败'), 502, 's3_error');
+    }
+
+    activity_log($userId, 'object.mkdir', null, $bucket . ' / ' . mb_substr($key, 0, 120));
+    json_ok(['key' => $key]);
+}

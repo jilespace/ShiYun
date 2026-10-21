@@ -406,6 +406,16 @@ $js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
 check(str_contains($js, 'objects.download_sign'), '前端请求下载链接');
 check(str_contains($js, 'objects.restore'), '前端可触发解冻');
 
+echo "\n· 复制与删除\n";
+$module = (string) file_get_contents(BASE_PATH . '/app/modules/objects.php');
+check(str_contains($module, 'function objects_copy'), '复制接口存在');
+check(str_contains($module, 'function objects_delete'), '批量删除接口存在');
+check(str_contains($module, 'function objects_mkdir'), '新建文件夹接口存在');
+$js = (string) file_get_contents(BASE_PATH . '/assets/js/objects.js');
+check(str_contains($js, 'objects.copy'), '前端调用复制');
+check(str_contains($js, 'objects.delete'), '前端调用批量删除');
+check(str_contains($js, 'data-obj-delete-selected'), '前端有删除所选');
+
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
 q_exec('DELETE FROM user_settings WHERE user_id IN (?, ?)', [$uid, $otherId]);

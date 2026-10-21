@@ -789,6 +789,69 @@
         if (info) { showInfo(info.dataset.objInfo); }
     });
 
+    /* ---------------------------------------------------------- 复制/删除/文件夹 */
+
+    async function copyKey(key) {
+        const isMove = await SY.confirm(
+            '复制还是移动？',
+            '对象：' + key + '。选「移动」会删除源对象；选「取消」则只复制。',
+            '移动',
+            false
+        );
+        const target = await SY.prompt('目标对象键', '输入完整目标键', key);
+        if (target === null) return;
+        try {
+            const r = await api('objects.copy', {
+                account: state.account, bucket: state.bucket,
+                source: key, target: target.trim(), mode: isMove ? 'move' : 'copy',
+            });
+            toast(r.message);
+            loadObjects();
+        } catch (err) {
+            toast(err.message, 'err');
+        }
+    }
+
+    async function deleteKeys(keys) {
+        if (!keys.length) return;
+        const ok = await SY.confirm('删除对象', '将删除 ' + keys.length + ' 个对象，此操作不可撤销。', '删除', true);
+        if (!ok) return;
+        try {
+            const r = await api('objects.delete', {
+                account: state.account, bucket: state.bucket, keys: keys,
+            });
+            toast(r.message);
+            state.selected.clear();
+            loadObjects();
+        } catch (err) {
+            toast(err.message, 'err');
+        }
+    }
+
+    el.objHost.addEventListener('click', (e) => {
+        const copy = e.target.closest('[data-obj-copy]');
+        if (copy) { copyKey(copy.dataset.objCopy); return; }
+        const del = e.target.closest('[data-obj-del]');
+        if (del) { deleteKeys([del.dataset.objDel]); }
+    });
+
+    $('[data-obj-delete-selected]')?.addEventListener('click', () => deleteKeys(Array.from(state.selected)));
+
+    $('[data-obj-mkdir]')?.addEventListener('click', async () => {
+        const name = await SY.prompt('新建文件夹', '文件夹名称', '');
+        if (name === null) return;
+        try {
+            await api('objects.mkdir', {
+                account: state.account, bucket: state.bucket,
+                prefix: state.prefix, name: name.trim(),
+            });
+            toast('文件夹已创建');
+            loadObjects();
+        } catch (err) {
+            toast(err.message, 'err');
+        }
+    });
+
     renderAccounts();
 
     // 首屏加载：函数由后续任务定义；这里只负责在定义就绪后调用一次
