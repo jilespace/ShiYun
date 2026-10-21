@@ -1180,6 +1180,15 @@ function s3_parse_object_page(string $xml, string $prefix = ''): array
         return $out;
     }
 
+    // 展示名只去掉到路径边界为止：目录浏览前缀以 / 结尾可直接去；
+    // 搜索前缀（如 photos/abc）只能去掉最后一个 / 及之前的部分，否则会把
+    // photos/abcdef.txt 误显示成 def.txt，键恰好等于前缀时还会变成空名。
+    $displayBase = $prefix;
+    if ($prefix !== '' && !str_ends_with($prefix, '/')) {
+        $slash = strrpos($prefix, '/');
+        $displayBase = $slash === false ? '' : substr($prefix, 0, $slash + 1);
+    }
+
     foreach ($doc->documentElement->childNodes as $node) {
         if (!$node instanceof DOMElement) {
             continue;
@@ -1194,8 +1203,8 @@ function s3_parse_object_page(string $xml, string $prefix = ''): array
             foreach ($node->childNodes as $child) {
                 if ($child instanceof DOMElement && $child->nodeName === 'Prefix') {
                     $full = $child->textContent;
-                    $name = ($prefix !== '' && str_starts_with($full, $prefix))
-                        ? substr($full, strlen($prefix)) : $full;
+                    $name = ($displayBase !== '' && str_starts_with($full, $displayBase))
+                        ? substr($full, strlen($displayBase)) : $full;
                     $out['folders'][] = ['prefix' => $full, 'name' => rtrim($name, '/')];
                 }
             }
@@ -1214,8 +1223,8 @@ function s3_parse_object_page(string $xml, string $prefix = ''): array
                 }
             }
             if ($row['key'] !== '') {
-                $row['name'] = ($prefix !== '' && str_starts_with($row['key'], $prefix))
-                    ? substr($row['key'], strlen($prefix)) : $row['key'];
+                $row['name'] = ($displayBase !== '' && str_starts_with($row['key'], $displayBase))
+                    ? substr($row['key'], strlen($displayBase)) : $row['key'];
                 $out['objects'][] = $row;
             }
         }

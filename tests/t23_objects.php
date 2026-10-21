@@ -215,6 +215,24 @@ check(str_contains((string) ($req['uri'] ?? ''), 'delimiter=%2F'), '请求带 de
 $page2 = s3_list_objects_page($cfg, 'photos-1250000000', ['prefix' => 'photos/', 'continuation_token' => 'page-2']);
 check($page2['truncated'] === false && $page2['objects'] === [], '第二页返回空且未截断');
 
+echo "\n· 搜索前缀的显示名\n";
+// Task 8 的搜索前缀可能不以 / 结尾（photos/abc），此时展示名只应去掉到最后一个 / 为止。
+$searchXml = '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>'
+    . '<CommonPrefixes><Prefix>photos/abc2026/</Prefix></CommonPrefixes>'
+    . '<Contents><Key>photos/abcdef.txt</Key><Size>1</Size></Contents>'
+    . '<Contents><Key>photos/abc</Key><Size>2</Size></Contents>'
+    . '<Contents><Key>photos/a b+c.jpg</Key><Size>3</Size></Contents>'
+    . '<IsTruncated>false</IsTruncated></ListBucketResult>';
+
+$search = s3_parse_object_page($searchXml, 'photos/abc');
+check($search['objects'][0]['name'] === 'abcdef.txt', '非边界前缀不吞掉键名前段');
+check($search['objects'][1]['name'] === 'abc', '键恰好等于前缀时显示名不为空');
+check($search['objects'][0]['key'] === 'photos/abcdef.txt', '原始 key 字段不受显示名影响');
+check($search['folders'][0]['name'] === 'abc2026', 'CommonPrefixes 同样按路径边界去前缀');
+
+$dirParse = s3_parse_object_page($searchXml, 'photos/');
+check($dirParse['objects'][2]['name'] === 'a b+c.jpg', '目录浏览（前缀以 / 结尾）显示名保持不变');
+
 q_exec('DELETE FROM storage_sources WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id IN (?, ?)', [$uid, $otherId]);
 q_exec('DELETE FROM user_settings WHERE user_id IN (?, ?)', [$uid, $otherId]);
