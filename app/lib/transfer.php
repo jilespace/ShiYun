@@ -277,3 +277,103 @@ function transfer_reap_rooms(): void
     }
     q_exec('DELETE FROM transfer_attempts WHERE created_at < ?', [date('Y-m-d H:i:s', time() - 86400)]);
 }
+
+function transfer_room_unlocked(array $room): bool
+{
+    if (($room['password_hash'] ?? null) === null) {
+        return true;
+    }
+    return !empty($_SESSION['transfer_unlock'][(int) $room['id']]);
+}
+
+function transfer_join_by_code(string $code, string $password): array
+{
+    transfer_assert_can_guess();
+    $code = trim($code);
+    if (preg_match('/^\d{6}$/', $code) !== 1) {
+        transfer_rate_add('join', $code);
+        throw new InvalidArgumentException('取件码不正确。');
+    }
+
+    $room = q_one('SELECT * FROM transfer_rooms WHERE code = ?', [$code]);
+    if ($room === null || strtotime((string) $room['expires_at']) <= time()) {
+        transfer_rate_add('join', $code);
+        if ($room !== null) {
+            transfer_room_destroy((int) $room['id']);
+        }
+        throw new InvalidArgumentException('取件码不正确或房间已过期。');
+    }
+
+    if (($room['password_hash'] ?? null) !== null
+        && ($password === '' || !password_verify($password, (string) $room['password_hash']))) {
+        transfer_rate_add('join', $code);
+        throw new InvalidArgumentException('取件码或密码不正确。');
+    }
+
+    $_SESSION['transfer_unlock'][(int) $room['id']] = true;
+    return $room;
+}
+
+function transfer_unlock_room(array $room, string $password): void
+{
+    transfer_assert_can_guess();
+    if (($room['password_hash'] ?? null) === null) {
+        $_SESSION['transfer_unlock'][(int) $room['id']] = true;
+        return;
+    }
+    if ($password === '' || !password_verify($password, (string) $room['password_hash'])) {
+        transfer_rate_add('join', (string) $room['code']);
+        throw new InvalidArgumentException('密码不正确。');
+    }
+    $_SESSION['transfer_unlock'][(int) $room['id']] = true;
+}
+
+function transfer_files_list(array $room): array
+{
+    $rows = q_all(
+        'SELECT id, name, size, mime, uploader_name, created_at
+           FROM transfer_files WHERE room_id = ? ORDER BY id ASC',
+        [(int) $room['id']]
+    );
+    return array_map(static fn (array $r): array => [
+        'id'        => (int) $r['id'],
+        'name'      => (string) $r['name'],
+        'size'      => (int) $r['size'],
+        'mime'      => (string) ($r['mime'] ?? ''),
+        'uploader'  => (string) ($r['uploader_name'] ?? ''),
+        'createdAt' => (string) $r['created_at'],
+    ], $rows);
+}
+
+function transfer_file_remove(array $room, int $fileId): void
+{
+    $file = q_one(
+        'SELECT * FROM transfer_files WHERE id = ? AND room_id = ?',
+        [$fileId, (int) $room['id']]
+    );
+    if ($file === null) {
+        throw new InvalidArgumentException('文件不存在。');
+    }
+    $path = transfer_file_path($room, $file);
+    if (is_file($path)) {
+        @unlink($path);
+    }
+    db_tx(static function () use ($room, $file, $fileId): void {
+        q_exec('DELETE FROM transfer_files WHERE id = ?', [$fileId]);
+        q_exec(
+            'UPDATE transfer_rooms
+                SET used_bytes = GREATEST(0, used_bytes - ?),
+                    file_count = GREATEST(0, file_count - 1)
+              WHERE id = ?',
+            [(int) $file['size'], (int) $room['id']]
+        );
+    });
+}
+
+function transfer_room_close(array $room, string $creatorKey): void
+{
+    if (!transfer_verify_creator($room, $creatorKey)) {
+        throw new InvalidArgumentException('没有权限关闭这个房间。');
+    }
+    transfer_room_destroy((int) $room['id']);
+}
