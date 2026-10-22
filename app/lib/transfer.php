@@ -715,3 +715,65 @@ function transfer_parse_range(string $header, int $size): ?array
     }
     return [$start, $end];
 }
+
+function transfer_stream(array $room, array $file): never
+{
+    $path = transfer_file_path($room, $file);
+    if (!is_file($path)) {
+        http_response_code(404);
+        exit;
+    }
+
+    $size = (int) filesize($path);
+    $start = 0;
+    $end = max(0, $size - 1);
+    $partial = false;
+    $range = transfer_parse_range((string) ($_SERVER['HTTP_RANGE'] ?? ''), $size);
+    if ($range !== null) {
+        [$start, $end] = $range;
+        $partial = true;
+    }
+    $length = $size === 0 ? 0 : $end - $start + 1;
+
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    http_response_code($partial ? 206 : 200);
+    header('Content-Type: application/octet-stream');
+    header("Content-Disposition: attachment; filename*=UTF-8''" . rawurlencode((string) $file['name']));
+    header('X-Content-Type-Options: nosniff');
+    header('Accept-Ranges: bytes');
+    header('Cache-Control: private, no-store');
+    if ($partial) {
+        header('Content-Range: bytes ' . $start . '-' . $end . '/' . $size);
+    }
+    header('Content-Length: ' . $length);
+
+    if ($length === 0) {
+        exit;
+    }
+    $fh = fopen($path, 'rb');
+    if ($fh === false) {
+        exit;
+    }
+    if ($start > 0) {
+        fseek($fh, $start);
+    }
+    $left = $length;
+    while ($left > 0 && !feof($fh)) {
+        $buf = fread($fh, min(8192, $left));
+        if ($buf === false || $buf === '') {
+            break;
+        }
+        echo $buf;
+        $left -= strlen($buf);
+        flush();
+    }
+    fclose($fh);
+
+    q_exec(
+        'UPDATE transfer_rooms SET last_access_at = ? WHERE id = ? AND (last_access_at IS NULL OR last_access_at < ?)',
+        [now(), (int) $room['id'], date('Y-m-d H:i:s', time() - 60)]
+    );
+    exit;
+}

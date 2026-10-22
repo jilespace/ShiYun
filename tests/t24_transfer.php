@@ -248,6 +248,11 @@ check(str_contains($roomJs, 'transfer.files') && str_contains($roomJs, 'transfer
 check(str_contains($roomJs, 'transfer.ck.'), '房间 JS 读取创建者 key');
 check(str_contains($roomJs, 'transfer.download'), '房间 JS 生成下载链接');
 
+$module = (string) file_get_contents(BASE_PATH . '/app/modules/transfer.php');
+check(str_contains($module, 'function transfer_upload_chunk'), '上传分片接口存在');
+check(str_contains($module, 'function transfer_download'), '下载接口存在');
+check(str_contains($module, 'transfer_upload_start'), '上传控制器调用领域函数');
+
 q_exec('DELETE FROM transfer_attempts WHERE ip = ?', ['198.51.100.23']);
 foreach ((array) glob($tmpRoot . '/*') as $p) {
     transfer_rmdir($p);

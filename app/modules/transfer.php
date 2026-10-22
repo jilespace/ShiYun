@@ -180,3 +180,118 @@ function transfer_file_delete(): void
     }
     json_ok(['deleted' => true]);
 }
+
+function transfer_upload_init(): void
+{
+    require_method('POST');
+    require_csrf();
+    $room = transfer_require_room();
+    transfer_require_unlocked($room);
+    try {
+        $init = transfer_upload_start(
+            $room,
+            (string) input('name', ''),
+            input_int('size'),
+            (string) input('sender', '')
+        );
+    } catch (TransferRateLimitException $e) {
+        json_fail($e->getMessage(), 429, 'too_many');
+    } catch (TransferCapacityException $e) {
+        json_fail($e->getMessage(), 409, 'room_full');
+    } catch (InvalidArgumentException $e) {
+        json_fail($e->getMessage(), 422, 'invalid');
+    } catch (RuntimeException $e) {
+        json_fail(safe_error_message($e, '上传初始化失败，请重试。'), 400, 'error');
+    }
+    json_ok($init);
+}
+
+function transfer_upload_chunk(): void
+{
+    require_method('POST');
+    require_csrf();
+    $room = transfer_require_room();
+    transfer_require_unlocked($room);
+
+    $uploadId = preg_replace('/[^a-f0-9]/', '', (string) ($_SERVER['HTTP_X_UPLOAD_ID'] ?? '')) ?? '';
+    $index = (int) ($_SERVER['HTTP_X_CHUNK_INDEX'] ?? -1);
+    $declared = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
+    if ($uploadId === '' || $index < 0) {
+        json_fail('分片参数不完整。', 422, 'invalid');
+    }
+    if ($declared > (int) config('chunk_size', 5 * 1024 * 1024) + 1024) {
+        json_fail('分片超过约定大小。', 413, 'chunk_failed');
+    }
+    $bytes = (string) file_get_contents('php://input');
+    try {
+        json_ok(transfer_store_chunk_bytes($room, $uploadId, $index, $bytes, $declared));
+    } catch (InvalidArgumentException $e) {
+        json_fail($e->getMessage(), 409, 'chunk_failed');
+    } catch (RuntimeException $e) {
+        json_fail(safe_error_message($e, '分片上传失败，请重试。'), 409, 'chunk_failed');
+    }
+}
+
+function transfer_upload_complete(): void
+{
+    require_method('POST');
+    require_csrf();
+    $room = transfer_require_room();
+    transfer_require_unlocked($room);
+    $uploadId = preg_replace('/[^a-f0-9]/', '', (string) input('uploadId', '')) ?? '';
+    if ($uploadId === '') {
+        json_fail('缺少上传会话。', 422, 'invalid');
+    }
+    try {
+        json_ok(transfer_upload_finish($room, $uploadId));
+    } catch (TransferCapacityException $e) {
+        json_fail($e->getMessage(), 409, 'room_full');
+    } catch (InvalidArgumentException $e) {
+        json_fail($e->getMessage(), 409, 'incomplete');
+    } catch (RuntimeException $e) {
+        json_fail(safe_error_message($e, '上传处理失败，请重试。'), 409, 'in_progress');
+    }
+}
+
+function transfer_upload_abort(): void
+{
+    require_method('POST');
+    require_csrf();
+    $room = transfer_require_room();
+    transfer_require_unlocked($room);
+    $uploadId = preg_replace('/[^a-f0-9]/', '', (string) input('uploadId', '')) ?? '';
+    if ($uploadId === '') {
+        json_fail('缺少上传会话。', 422, 'invalid');
+    }
+    try {
+        transfer_upload_cancel($room, $uploadId);
+    } catch (RuntimeException $e) {
+        json_fail(safe_error_message($e, '放弃上传失败，请重试。'), 409, 'in_progress');
+    }
+    json_ok(['aborted' => true]);
+}
+
+function transfer_download(): void
+{
+    $room = transfer_room_by_token((string) input('t', ''));
+    if ($room === null) {
+        http_response_code(404);
+        header('Content-Type: text/plain; charset=utf-8');
+        exit('房间不存在或已关闭。');
+    }
+    if (!transfer_room_unlocked($room)) {
+        http_response_code(403);
+        header('Content-Type: text/plain; charset=utf-8');
+        exit('需要提取密码。');
+    }
+    $file = q_one(
+        'SELECT * FROM transfer_files WHERE id = ? AND room_id = ?',
+        [input_int('id'), (int) $room['id']]
+    );
+    if ($file === null) {
+        http_response_code(404);
+        header('Content-Type: text/plain; charset=utf-8');
+        exit('文件不存在。');
+    }
+    transfer_stream($room, $file);
+}
