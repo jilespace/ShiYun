@@ -116,6 +116,115 @@ check((int) $afterDel['used_bytes'] === 0 && (int) $afterDel['file_count'] === 0
 check(!is_file(transfer_room_dir((string) $del['token']) . '/' . $stored), '删除文件物理文件');
 transfer_room_destroy((int) $del['id']);
 
+echo "\n· 分片上传\n";
+$GLOBALS['config']['chunk_size'] = 4;
+$GLOBALS['config']['transfer_max_bytes'] = 20;
+$up = transfer_room_create('');
+$upRoom = transfer_room_by_token((string) $up['token']);
+$init = transfer_upload_start($upRoom ?? [], 'hello.txt', 10, 'Alice');
+check($init['totalChunks'] === 3 && $init['chunkSize'] === 4, '初始化返回 3 片 × 4 字节');
+check((int) q_val('SELECT reserved_bytes FROM transfer_rooms WHERE id = ?', [(int)$up['id']]) === 10, '初始化预留 10 字节');
+transfer_store_chunk_bytes($upRoom ?? [], (string) $init['uploadId'], 0, 'abcd');
+transfer_store_chunk_bytes($upRoom ?? [], (string) $init['uploadId'], 1, 'efgh');
+transfer_store_chunk_bytes($upRoom ?? [], (string) $init['uploadId'], 2, 'ij');
+$done = transfer_upload_finish($upRoom ?? [], (string) $init['uploadId']);
+check($done['size'] === 10 && $done['name'] === 'hello.txt', '合并成功并返回文件信息');
+$fresh = transfer_room_by_token((string) $up['token']);
+check((int) $fresh['used_bytes'] === 10 && (int) $fresh['reserved_bytes'] === 0, '完成时扣容量、释放预留');
+check(is_file(transfer_room_dir((string)$up['token']) . '/' . $done['stored_name']), '合并文件落盘');
+$files = transfer_files_list($fresh);
+check(count($files) === 1 && $files[0]['uploader'] === 'Alice', '文件列表包含上传者昵称');
+
+$roomForCap = transfer_room_by_token((string) $up['token']);
+$threw = false;
+try { transfer_upload_start($roomForCap ?? [], 'too-big.bin', 11, ''); } catch (TransferCapacityException $e) { $threw = true; }
+check($threw, '剩余容量不足时初始化被拒');
+
+$conc = transfer_room_create('');
+$concRoom = transfer_room_by_token((string) $conc['token']);
+$hold = transfer_upload_start($concRoom ?? [], 'hold.bin', 12, '');
+$threw = false;
+try { transfer_upload_start($concRoom ?? [], 'second.bin', 9, ''); } catch (TransferCapacityException $e) { $threw = true; }
+check($threw, '两笔预留叠加后超过总容量被拒');
+transfer_upload_cancel($concRoom ?? [], (string) $hold['uploadId']);
+transfer_room_destroy((int) $conc['id']);
+
+echo "\n· 分片边界\n";
+$init2 = transfer_upload_start($roomForCap ?? [], 'edge.bin', 5, '');
+$threw = false;
+try { transfer_store_chunk_bytes($roomForCap ?? [], (string)$init2['uploadId'], 0, '12345'); } catch (InvalidArgumentException $e) { $threw = true; }
+check($threw, '分片超过 chunk_size 被拒');
+transfer_upload_cancel($roomForCap ?? [], (string)$init2['uploadId']);
+
+$dupInit = transfer_upload_start($roomForCap ?? [], 'dup.bin', 8, '');
+transfer_store_chunk_bytes($roomForCap ?? [], (string)$dupInit['uploadId'], 0, 'abcd');
+transfer_store_chunk_bytes($roomForCap ?? [], (string)$dupInit['uploadId'], 0, 'ab');
+check((int) q_val('SELECT received_bytes FROM transfer_uploads WHERE upload_id = ?', [(string)$dupInit['uploadId']]) === 2,
+    '重复分片按覆盖回正字节数');
+transfer_upload_cancel($roomForCap ?? [], (string)$dupInit['uploadId']);
+
+$afterAbort = transfer_room_by_token((string) $up['token']);
+
+echo "\n· 空文件\n";
+$init3 = transfer_upload_start($afterAbort ?? [], 'empty.txt', 0, '');
+$empty = transfer_upload_finish($afterAbort ?? [], (string)$init3['uploadId']);
+check($empty['size'] === 0 && is_file(transfer_room_dir((string)$up['token']) . '/' . $empty['stored_name']), '0 字节文件可创建');
+
+echo "\n· 路径与缺片\n";
+$evilInit = transfer_upload_start($afterAbort ?? [], '../../evil.txt', 1, '');
+$evilName = (string) q_val('SELECT filename FROM transfer_uploads WHERE upload_id = ?', [(string)$evilInit['uploadId']]);
+check($evilName !== '' && !str_contains($evilName, '/') && !str_contains($evilName, '\\'),
+    '文件名路径分隔符被清洗');
+transfer_upload_cancel($afterAbort ?? [], (string)$evilInit['uploadId']);
+
+$edgeInit = transfer_upload_start($afterAbort ?? [], 'edge2.txt', 4, '');
+$threw = false;
+try { transfer_store_chunk_bytes($afterAbort ?? [], (string)$edgeInit['uploadId'], 99, 'x'); } catch (InvalidArgumentException $e) { $threw = true; }
+check($threw, '分片序号越界被拒');
+$threw = false;
+try { transfer_upload_finish($afterAbort ?? [], (string)$edgeInit['uploadId']); } catch (InvalidArgumentException $e) { $threw = true; }
+check($threw, '缺片时合并被拒');
+transfer_upload_cancel($afterAbort ?? [], (string)$edgeInit['uploadId']);
+
+echo "\n· Range\n";
+check(transfer_parse_range('bytes=0-4', 10) === [0, 4], '解析前 5 字节');
+check(transfer_parse_range('bytes=-3', 10) === [7, 9], '解析后缀范围');
+check(transfer_parse_range('bytes=8-', 10) === [8, 9], '解析开放结尾');
+check(transfer_parse_range('bytes=10-', 10) === null, '起点越界返回 null');
+check(transfer_parse_range('', 10) === null, '空头返回 null');
+
+echo "\n· 超时会话\n";
+q_insert('transfer_uploads', [
+    'upload_id' => bin2hex(random_bytes(16)), 'room_id' => (int)$up['id'],
+    'filename' => 'stale.bin', 'size' => 4, 'chunk_size' => 4, 'total_chunks' => 1,
+    'received' => json_encode([]), 'received_bytes' => 0, 'uploader_name' => null,
+    'status' => 'uploading', 'created_at' => date('Y-m-d H:i:s', time() - 7200),
+    'updated_at' => date('Y-m-d H:i:s', time() - 7200),
+]);
+q_exec('UPDATE transfer_rooms SET reserved_bytes = reserved_bytes + 4 WHERE id = ?', [(int)$up['id']]);
+transfer_reap_stale_uploads();
+$reaped = transfer_room_by_token((string)$up['token']);
+check((int)$reaped['reserved_bytes'] === 0, '超时会话释放预留');
+
+echo "\n· 文件数上限\n";
+$GLOBALS['config']['transfer_max_files'] = 1;
+$one = transfer_room_create('');
+$oneRoom = transfer_room_by_token((string) $one['token']);
+$u1 = transfer_upload_start($oneRoom ?? [], '1.txt', 1, '');
+transfer_store_chunk_bytes($oneRoom ?? [], (string) $u1['uploadId'], 0, 'a');
+transfer_upload_finish($oneRoom ?? [], (string) $u1['uploadId']);
+$u2 = transfer_upload_start($oneRoom ?? [], '2.txt', 1, '');
+transfer_store_chunk_bytes($oneRoom ?? [], (string) $u2['uploadId'], 0, 'b');
+$threw = false;
+try { transfer_upload_finish($oneRoom ?? [], (string) $u2['uploadId']); } catch (TransferCapacityException $e) { $threw = true; }
+check($threw, '超过文件数上限时合并不落库');
+transfer_room_destroy((int) $one['id']);
+
+transfer_room_destroy((int)$up['id']);
+$GLOBALS['config']['chunk_size'] = 5 * 1024 * 1024;
+$GLOBALS['config']['transfer_max_bytes'] = 1024 * 1024;
+$GLOBALS['config']['transfer_max_files'] = 200;
+
 q_exec('DELETE FROM transfer_attempts WHERE ip = ?', ['198.51.100.23']);
 foreach ((array) glob($tmpRoot . '/*') as $p) {
     transfer_rmdir($p);

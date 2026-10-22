@@ -377,3 +377,341 @@ function transfer_room_close(array $room, string $creatorKey): void
     }
     transfer_room_destroy((int) $room['id']);
 }
+
+function transfer_upload_start(array $room, string $name, int $size, string $sender = ''): array
+{
+    if (strtotime((string) $room['expires_at']) <= time()) {
+        throw new InvalidArgumentException('房间已过期。');
+    }
+    $name = safe_filename($name);
+    if ($name === null) {
+        throw new InvalidArgumentException('文件名不合法。');
+    }
+    if ($size < 0) {
+        throw new InvalidArgumentException('文件大小不合法。');
+    }
+    if ($size > (int) config('max_upload')) {
+        throw new InvalidArgumentException('文件超过单文件上限。');
+    }
+
+    $inflight = (int) q_val(
+        "SELECT COUNT(*) FROM transfer_uploads
+          WHERE room_id = ? AND status IN ('pending','uploading') AND updated_at >= ?",
+        [(int) $room['id'], date('Y-m-d H:i:s', time() - 3600)]
+    );
+    if ($inflight >= 20) {
+        throw new TransferRateLimitException('同时进行的上传太多了，请稍后再试。');
+    }
+
+    // 0 字节文件不需要预留；也避免 UPDATE 不改变行导致 rowCount=0 的误判
+    if ($size > 0) {
+        $reserved = q_exec(
+            'UPDATE transfer_rooms
+                SET reserved_bytes = reserved_bytes + ?
+              WHERE id = ? AND expires_at > ?
+                AND used_bytes + reserved_bytes + ? <= max_bytes',
+            [$size, (int) $room['id'], now(), $size]
+        );
+        if ($reserved !== 1) {
+            throw new TransferCapacityException('房间剩余容量不足。');
+        }
+    }
+
+    $chunkSize = max(1, (int) config('chunk_size', 5 * 1024 * 1024));
+    $total = $size === 0 ? 1 : (int) ceil($size / $chunkSize);
+    if ($total > 10000) {
+        q_exec('UPDATE transfer_rooms SET reserved_bytes = GREATEST(0, reserved_bytes - ?) WHERE id = ?', [$size, (int) $room['id']]);
+        throw new InvalidArgumentException('文件太大，分片数量超过上限。');
+    }
+
+    $uploadId = bin2hex(random_bytes(16));
+    try {
+        q_insert('transfer_uploads', [
+            'upload_id'      => $uploadId,
+            'room_id'        => (int) $room['id'],
+            'filename'       => $name,
+            'size'           => $size,
+            'chunk_size'     => $chunkSize,
+            'total_chunks'   => $total,
+            'received'       => json_encode([]),
+            'received_bytes' => 0,
+            'uploader_name'  => $sender !== '' ? mb_substr($sender, 0, 40) : null,
+            'status'         => 'pending',
+            'created_at'     => now(),
+            'updated_at'     => now(),
+        ]);
+    } catch (Throwable $e) {
+        q_exec('UPDATE transfer_rooms SET reserved_bytes = GREATEST(0, reserved_bytes - ?) WHERE id = ?', [$size, (int) $room['id']]);
+        throw new RuntimeException('无法初始化上传。');
+    }
+
+    return ['uploadId' => $uploadId, 'chunkSize' => $chunkSize, 'totalChunks' => $total];
+}
+
+function transfer_store_chunk_bytes(
+    array $room,
+    string $uploadId,
+    int $index,
+    string $bytes,
+    int $declaredLength = 0
+): array {
+    $session = q_one(
+        'SELECT * FROM transfer_uploads WHERE upload_id = ? AND room_id = ? LIMIT 1',
+        [$uploadId, (int) $room['id']]
+    );
+    if ($session === null || !in_array((string) $session['status'], ['pending', 'uploading'], true)) {
+        throw new InvalidArgumentException('上传会话不存在或已过期。');
+    }
+    $total = (int) $session['total_chunks'];
+    if ($index < 0 || $index >= $total) {
+        throw new InvalidArgumentException('分片序号越界。');
+    }
+    $chunkSize = (int) $session['chunk_size'];
+    $size = (int) $session['size'];
+    $written = strlen($bytes);
+    if ($chunkSize > 0 && $written > $chunkSize) {
+        throw new InvalidArgumentException('分片超过约定的分片大小。');
+    }
+    if ($written === 0 && $declaredLength > 0) {
+        throw new InvalidArgumentException('分片为空，请重试。');
+    }
+    if ($size === 0 && $written > 0) {
+        throw new InvalidArgumentException('空文件不应包含分片数据。');
+    }
+    if ($size > 0 && $written > $size) {
+        throw new InvalidArgumentException('分片超过文件声明大小。');
+    }
+
+    $dir = transfer_upload_dir((string) $room['token'], $uploadId);
+    if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
+        throw new RuntimeException('无法创建分片目录。');
+    }
+    $target = $dir . '/' . $index . '.part';
+    if (file_put_contents($target, $bytes) === false) {
+        throw new RuntimeException('无法写入分片。');
+    }
+    @chmod($target, 0600);
+
+    $result = null;
+    db_tx(static function () use ($session, $index, $written, $size, $chunkSize, &$result): void {
+        $row = q_one('SELECT received, received_bytes FROM transfer_uploads WHERE id = ? FOR UPDATE', [(int) $session['id']]);
+        if ($row === null) {
+            throw new RuntimeException('上传会话已不存在。');
+        }
+        $received = json_decode((string) $row['received'], true);
+        if (!is_array($received)) {
+            $received = [];
+        }
+        $prev = (int) ($received[$index] ?? 0);
+        $nextTotal = (int) $row['received_bytes'] - $prev + $written;
+        $cap = $size > 0 ? $size : $chunkSize;
+        if ($cap > 0 && $nextTotal > $cap) {
+            throw new InvalidArgumentException('累计分片超过文件声明大小。');
+        }
+        $received[$index] = $written;
+        q_update('transfer_uploads', [
+            'received'       => json_encode($received),
+            'received_bytes' => $nextTotal,
+            'status'         => 'uploading',
+            'updated_at'     => now(),
+        ], 'id = ?', [(int) $session['id']]);
+        $result = ['received' => count($received), 'total' => (int) $session['total_chunks']];
+    });
+
+    return $result ?? ['received' => 0, 'total' => $total];
+}
+
+function transfer_upload_finish(array $room, string $uploadId): array
+{
+    $session = q_one(
+        'SELECT * FROM transfer_uploads WHERE upload_id = ? AND room_id = ? LIMIT 1',
+        [$uploadId, (int) $room['id']]
+    );
+    if ($session === null) {
+        throw new InvalidArgumentException('上传会话不存在或已过期。');
+    }
+
+    $declared = (int) $session['size'];
+    $total = (int) $session['total_chunks'];
+    $received = json_decode((string) $session['received'], true);
+    if (!is_array($received)) {
+        $received = [];
+    }
+    $dir = transfer_upload_dir((string) $room['token'], $uploadId);
+    if ($declared > 0) {
+        for ($i = 0; $i < $total; $i++) {
+            if (!isset($received[$i]) || !is_file($dir . '/' . $i . '.part')) {
+                throw new InvalidArgumentException('还有分片没有上传完成。');
+            }
+        }
+    }
+
+    $claimed = q_exec(
+        "UPDATE transfer_uploads SET status = 'merging', updated_at = ?
+          WHERE id = ? AND (status IN ('pending','uploading') OR (status = 'merging' AND updated_at < ?))",
+        [now(), (int) $session['id'], date('Y-m-d H:i:s', time() - 600)]
+    );
+    if ($claimed !== 1) {
+        throw new RuntimeException('这次上传正在处理中，请稍候重试。');
+    }
+
+    $storedName = bin2hex(random_bytes(16));
+    $target = transfer_room_dir((string) $room['token']) . '/' . $storedName;
+    $actual = 0;
+    $fh = fopen($target, 'wb');
+    if ($fh === false) {
+        q_exec("UPDATE transfer_uploads SET status='uploading' WHERE id = ?", [(int) $session['id']]);
+        throw new RuntimeException('无法写入合并文件。');
+    }
+    try {
+        for ($i = 0; $i < $total; $i++) {
+            $part = $dir . '/' . $i . '.part';
+            if (!is_file($part)) {
+                continue;
+            }
+            $in = fopen($part, 'rb');
+            if ($in === false) {
+                throw new RuntimeException('无法读取分片。');
+            }
+            $actual += (int) stream_copy_to_stream($in, $fh);
+            fclose($in);
+        }
+    } catch (Throwable $e) {
+        fclose($fh);
+        @unlink($target);
+        q_exec("UPDATE transfer_uploads SET status='uploading' WHERE id = ?", [(int) $session['id']]);
+        throw new RuntimeException('合并分片失败。');
+    }
+    fclose($fh);
+
+    if ($actual !== $declared) {
+        @unlink($target);
+        q_exec("UPDATE transfer_uploads SET status='uploading' WHERE id = ?", [(int) $session['id']]);
+        throw new InvalidArgumentException('合并后的文件大小与声明不一致。');
+    }
+
+    $name = (string) $session['filename'];
+    $mime = mime_of($name);
+    $fileId = 0;
+    try {
+        db_tx(static function () use ($room, $session, $storedName, $actual, $name, $mime, $declared, &$fileId): void {
+            $ok = q_exec(
+                'UPDATE transfer_rooms
+                    SET used_bytes = used_bytes + ?,
+                        reserved_bytes = GREATEST(0, reserved_bytes - ?),
+                        file_count = file_count + 1
+                  WHERE id = ?
+                    AND used_bytes + ? <= max_bytes
+                    AND file_count < max_files',
+                [$actual, $declared, (int) $room['id'], $actual]
+            );
+            if ($ok !== 1) {
+                throw new TransferCapacityException('房间已满。');
+            }
+            $fileId = q_insert('transfer_files', [
+                'room_id'       => (int) $room['id'],
+                'name'          => $name,
+                'stored_name'   => $storedName,
+                'size'          => $actual,
+                'mime'          => $mime,
+                'uploader_name' => $session['uploader_name'] !== null ? (string) $session['uploader_name'] : null,
+                'created_at'    => now(),
+            ]);
+            q_exec('DELETE FROM transfer_uploads WHERE id = ?', [(int) $session['id']]);
+        });
+    } catch (Throwable $e) {
+        @unlink($target);
+        q_exec(
+            'UPDATE transfer_rooms SET reserved_bytes = GREATEST(0, reserved_bytes - ?) WHERE id = ?',
+            [$declared, (int) $room['id']]
+        );
+        q_exec('DELETE FROM transfer_uploads WHERE id = ?', [(int) $session['id']]);
+        throw $e;
+    }
+
+    transfer_rmdir($dir);
+
+    return [
+        'id'          => $fileId,
+        'name'        => $name,
+        'size'        => $actual,
+        'stored_name' => $storedName,
+        'uploader'    => (string) ($session['uploader_name'] ?? ''),
+    ];
+}
+
+function transfer_upload_cancel(array $room, string $uploadId): void
+{
+    $session = q_one(
+        'SELECT * FROM transfer_uploads WHERE upload_id = ? AND room_id = ? LIMIT 1',
+        [$uploadId, (int) $room['id']]
+    );
+    if ($session === null) {
+        return;
+    }
+    if ((string) $session['status'] === 'merging') {
+        throw new RuntimeException('上传正在合并，暂不能放弃。');
+    }
+    transfer_rmdir(transfer_upload_dir((string) $room['token'], $uploadId));
+    q_exec('DELETE FROM transfer_uploads WHERE id = ?', [(int) $session['id']]);
+    q_exec(
+        'UPDATE transfer_rooms SET reserved_bytes = GREATEST(0, reserved_bytes - ?) WHERE id = ?',
+        [(int) $session['size'], (int) $room['id']]
+    );
+}
+
+function transfer_reap_stale_uploads(): void
+{
+    $rows = q_all(
+        "SELECT * FROM transfer_uploads
+          WHERE status IN ('pending','uploading','merging') AND updated_at < ?",
+        [date('Y-m-d H:i:s', time() - 3600)]
+    );
+    foreach ($rows as $session) {
+        $room = q_one('SELECT * FROM transfer_rooms WHERE id = ?', [(int) $session['room_id']]);
+        if ($room !== null) {
+            transfer_rmdir(transfer_upload_dir((string) $room['token'], (string) $session['upload_id']));
+            q_exec(
+                'UPDATE transfer_rooms SET reserved_bytes = GREATEST(0, reserved_bytes - ?) WHERE id = ?',
+                [(int) $session['size'], (int) $room['id']]
+            );
+        }
+        q_exec('DELETE FROM transfer_uploads WHERE id = ?', [(int) $session['id']]);
+    }
+}
+
+function transfer_reap_expired(): void
+{
+    transfer_reap_rooms();
+    transfer_reap_stale_uploads();
+}
+
+function transfer_parse_range(string $header, int $size): ?array
+{
+    if ($header === '' || $size <= 0) {
+        return null;
+    }
+    if (preg_match('/^bytes=(\d*)-(\d*)$/', trim($header), $m) !== 1) {
+        return null;
+    }
+    if ($m[1] === '' && $m[2] === '') {
+        return null;
+    }
+    if ($m[1] === '') {
+        $len = (int) $m[2];
+        if ($len <= 0) {
+            return null;
+        }
+        return [max(0, $size - $len), $size - 1];
+    }
+    $start = (int) $m[1];
+    if ($start >= $size) {
+        return null;
+    }
+    $end = $m[2] === '' ? $size - 1 : (int) $m[2];
+    $end = min($end, $size - 1);
+    if ($end < $start) {
+        return null;
+    }
+    return [$start, $end];
+}
