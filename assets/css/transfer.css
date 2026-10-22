@@ -1,5 +1,9 @@
 /* 拾云 · 临时传输（公开页） */
 .tp {
+    /* 背景画布 .field 是 fixed + z-index:0 且接收指针事件；页面必须压在它上面，
+       否则真实鼠标点击会全部落在画布上（程序化 .click() 不受影响，容易漏测）。 */
+    position: relative;
+    z-index: 2;
     min-height: 100vh;
     display: flex;
     flex-direction: column;
