@@ -88,6 +88,12 @@ return [
     'transfer_create_per_hour' => 5,
     'transfer_code_attempts'   => 10,
     'transfer_storage_path'    => BASE_PATH . '/runtime/transfer',
+    // 站点在可信反向代理 / frp 后面时设为 true：仅当直连 peer 是回环，
+    // 才采信 X-Forwarded-For / X-Real-IP 作为来源 IP（用于限速）。
+    'transfer_trust_proxy'      => false,
+    // 全局上限：所有房间 max_bytes 之和 / 活跃房间数，防止匿名上传刷满磁盘。
+    'transfer_global_max_bytes' => 50 * 1024 ** 3,
+    'transfer_global_max_rooms' => 20,
 
     // ---------------------------------------------------------------- 集成
     // 外部下载引擎（aria2 等）。未安装时离线下载仅支持 HTTP/FTP，BT/磁力会明确报错

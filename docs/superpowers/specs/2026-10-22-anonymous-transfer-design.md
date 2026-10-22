@@ -311,7 +311,9 @@ CREATE TABLE IF NOT EXISTS transfer_attempts (
   - 试码/试密码：每 IP 每 10 分钟最多 10 次失败；超过锁 15 分钟；返回 `429 rate_limited`。`transfer.join` 与 `transfer.unlock` 的失败共用这个计数。
   - 分片会话：每房间同时最多 20 个。
 - **容量**：房间 10 GB、200 文件、单文件 ≤ 剩余容量；`reserved_bytes` 防止并发上传超卖。
-- **磁盘**：分片单请求上限 `chunk_size`；合并后实际字节不得超声明值；超时会话释放预留；全局可用 `transfer_enabled=false` 直接关闭功能。
+- **全局上限**：`transfer_global_max_bytes`（所有房间 `max_bytes` 之和，默认 50 GiB）与 `transfer_global_max_rooms`（默认 20）；建房时用 MySQL 命名锁串行化检查，防止刷房间把磁盘写满。
+- **代理后的真实 IP**：站点在 frp/反向代理后面时直连 peer 是回环；只有 `transfer_trust_proxy=true` 且 peer 是回环时才采信 `X-Forwarded-For` / `X-Real-IP`，否则按 `REMOTE_ADDR`。生产部署在代理后必须开启，否则所有用户共用一个限速桶。
+- **磁盘**：分片单请求上限 `chunk_size`；合并后实际字节不得超声明值；超时会话释放预留；`transfer_enabled=false` 只阻止**新建房间**，已有房间仍可访问到到期或创建者关闭（要立即停服需手动删除房间行/目录）。
 - **路径安全**：文件名只用于展示/下载头；物理名是随机 32 位 hex；房间目录只由 token 推导；不跟随符号链接。
 - **XSS**：所有文件名/昵称/错误文案经 `escapeHtml`；房间页不内联展示文件内容；下载一律 `attachment` + `X-Content-Type-Options: nosniff`。
 - **暴力枚举**：6 位码有 100 万空间，靠 IP 限速 + 15 分钟锁定；高价值场景建议加密码。
@@ -330,6 +332,9 @@ CREATE TABLE IF NOT EXISTS transfer_attempts (
 'transfer_create_per_hour'=> 5,
 'transfer_code_attempts'  => 10,
 'transfer_storage_path'   => BASE_PATH . '/runtime/transfer',
+'transfer_trust_proxy'      => false,   // 在可信 frp/反向代理后面时设为 true
+'transfer_global_max_bytes' => 50 * 1024 ** 3,
+'transfer_global_max_rooms' => 20,
 ```
 
 ## 12. 错误处理

@@ -253,6 +253,60 @@ check(str_contains($module, 'function transfer_upload_chunk'), '上传分片接�
 check(str_contains($module, 'function transfer_download'), '下载接口存在');
 check(str_contains($module, 'transfer_upload_start'), '上传控制器调用领域函数');
 
+echo "\n· 最终审查修复\n";
+$_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+$_SERVER['HTTP_X_FORWARDED_FOR'] = '203.0.113.9, 10.0.0.1';
+$GLOBALS['config']['transfer_trust_proxy'] = true;
+check(transfer_ip() === '203.0.113.9', '受信代理下取 XFF 第一个地址');
+$GLOBALS['config']['transfer_trust_proxy'] = false;
+check(transfer_ip() === '127.0.0.1', '默认不信任代理头');
+$GLOBALS['config']['transfer_trust_proxy'] = true;
+$_SERVER['REMOTE_ADDR'] = '198.51.100.50';
+check(transfer_ip() === '198.51.100.50', '非回环直连不采信代理头');
+$_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+unset($_SERVER['HTTP_X_FORWARDED_FOR']);
+$_SERVER['HTTP_X_REAL_IP'] = '203.0.113.77';
+check(transfer_ip() === '203.0.113.77', '回退 X-Real-IP');
+unset($_SERVER['HTTP_X_REAL_IP']);
+$GLOBALS['config']['transfer_trust_proxy'] = false;
+$_SERVER['REMOTE_ADDR'] = '198.51.100.23';
+
+$statsBefore = q_one('SELECT COUNT(*) AS c, COALESCE(SUM(max_bytes), 0) AS b FROM transfer_rooms');
+$GLOBALS['config']['transfer_max_bytes'] = 10;
+$GLOBALS['config']['transfer_global_max_bytes'] = (int) $statsBefore['b'] + 20;
+$GLOBALS['config']['transfer_global_max_rooms'] = 1000;
+$g1 = transfer_room_create('');
+$g2 = transfer_room_create('');
+$threw = false;
+try { transfer_room_create(''); } catch (TransferCapacityException $e) { $threw = true; }
+check($threw, '超过全局总容量时拒绝建房');
+transfer_room_destroy((int) $g1['id']);
+transfer_room_destroy((int) $g2['id']);
+$GLOBALS['config']['transfer_max_bytes'] = 1024 * 1024;
+$GLOBALS['config']['transfer_global_max_bytes'] = 50 * 1024 ** 3;
+$GLOBALS['config']['transfer_global_max_rooms'] = 20;
+
+$GLOBALS['config']['chunk_size'] = 4;
+$m = transfer_room_create('');
+$mRoom = transfer_room_by_token((string) $m['token']);
+$mInit = transfer_upload_start($mRoom ?? [], 'merge.txt', 1, '');
+transfer_store_chunk_bytes($mRoom ?? [], (string) $mInit['uploadId'], 0, 'a');
+q_update('transfer_uploads', [
+    'status' => 'merging',
+    'updated_at' => date('Y-m-d H:i:s', time() - 1200),
+], 'upload_id = ?', [(string) $mInit['uploadId']]);
+$threw = false;
+try { transfer_upload_finish($mRoom ?? [], (string) $mInit['uploadId']); } catch (RuntimeException $e) { $threw = true; }
+check($threw, '合并中的会话不会被 20 分钟后的重试抢走');
+q_exec('DELETE FROM transfer_uploads WHERE upload_id = ?', [(string) $mInit['uploadId']]);
+q_exec('UPDATE transfer_rooms SET reserved_bytes = GREATEST(0, reserved_bytes - 1) WHERE id = ?', [(int) $m['id']]);
+transfer_rmdir(transfer_upload_dir((string) $m['token'], (string) $mInit['uploadId']));
+transfer_room_destroy((int) $m['id']);
+$GLOBALS['config']['chunk_size'] = 5 * 1024 * 1024;
+
+$libSrc = (string) file_get_contents(BASE_PATH . '/app/lib/transfer.php');
+check(str_contains($libSrc, '@set_time_limit(0)'), '下载流不设 PHP 执行时限');
+
 q_exec('DELETE FROM transfer_attempts WHERE ip = ?', ['198.51.100.23']);
 foreach ((array) glob($tmpRoot . '/*') as $p) {
     transfer_rmdir($p);

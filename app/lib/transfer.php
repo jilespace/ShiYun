@@ -51,7 +51,21 @@ function transfer_max_files(): int
 
 function transfer_ip(): string
 {
-    return mb_substr(client_ip(), 0, 45);
+    $remote = (string) ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
+
+    // 站点在 frp / 反向代理后面时直连 peer 是回环；只有显式信任且 peer 是回环
+    // 才采信代理头，否则所有人都挤在 127.0.0.1 的同一个限速桶里。
+    if ((bool) config('transfer_trust_proxy', false)
+        && in_array($remote, ['127.0.0.1', '::1'], true)) {
+        $xff = trim((string) ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? ''));
+        $real = trim((string) ($_SERVER['HTTP_X_REAL_IP'] ?? ''));
+        $candidate = $xff !== '' ? trim(explode(',', $xff)[0]) : $real;
+        if ($candidate !== '' && filter_var($candidate, FILTER_VALIDATE_IP) !== false) {
+            return mb_substr($candidate, 0, 45);
+        }
+    }
+
+    return mb_substr($remote, 0, 45);
 }
 
 function transfer_token(): string
@@ -136,46 +150,63 @@ function transfer_room_create(string $password = ''): array
 
     $expires = date('Y-m-d H:i:s', time() + transfer_ttl_hours() * 3600);
 
-    for ($attempt = 0; $attempt < 10; $attempt++) {
-        $token = transfer_token();
-        $code = transfer_new_code();
-        $creatorKey = bin2hex(random_bytes(24));
-        try {
-            $id = q_insert('transfer_rooms', [
-                'token'            => $token,
-                'code'             => $code,
-                'password_hash'    => $password !== '' ? password_hash($password, PASSWORD_DEFAULT) : null,
-                'creator_key_hash' => transfer_creator_hash($creatorKey),
-                'max_bytes'        => transfer_max_bytes(),
-                'max_files'        => transfer_max_files(),
-                'created_ip'       => transfer_ip(),
-                'created_at'       => now(),
-                'expires_at'       => $expires,
-            ]);
-        } catch (PDOException $e) {
-            if ((string) $e->getCode() === '23000') {
-                continue;
-            }
-            throw new RuntimeException('创建房间失败，请重试。');
-        }
-
-        $dir = transfer_room_dir($token);
-        if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
-            q_exec('DELETE FROM transfer_rooms WHERE id = ?', [$id]);
-            throw new RuntimeException('无法创建房间目录。');
-        }
-        $_SESSION['transfer_unlock'][$id] = true;
-
-        return [
-            'id'          => $id,
-            'token'       => $token,
-            'code'        => $code,
-            'creator_key' => $creatorKey,
-            'expires_at'  => $expires,
-        ];
+    // 建房前串行化，保证「活跃房间数 / max_bytes 总和」的全局上限不被并发绕过
+    $lock = (int) q_val("SELECT GET_LOCK('shiyun_transfer_create', 2)");
+    if ($lock !== 1) {
+        throw new TransferRateLimitException('创建太频繁，请稍后再试。');
     }
+    try {
+        $stats = q_one('SELECT COUNT(*) AS c, COALESCE(SUM(max_bytes), 0) AS b FROM transfer_rooms');
+        $maxRooms = max(1, (int) config('transfer_global_max_rooms', 20));
+        $maxBytes = max(transfer_max_bytes(), (int) config('transfer_global_max_bytes', 50 * 1024 ** 3));
+        if ((int) $stats['c'] >= $maxRooms
+            || (int) $stats['b'] + transfer_max_bytes() > $maxBytes) {
+            throw new TransferCapacityException('临时传输总容量已满，请稍后再试。');
+        }
 
-    throw new RuntimeException('创建房间失败，请重试。');
+        for ($attempt = 0; $attempt < 10; $attempt++) {
+            $token = transfer_token();
+            $code = transfer_new_code();
+            $creatorKey = bin2hex(random_bytes(24));
+            try {
+                $id = q_insert('transfer_rooms', [
+                    'token'            => $token,
+                    'code'             => $code,
+                    'password_hash'    => $password !== '' ? password_hash($password, PASSWORD_DEFAULT) : null,
+                    'creator_key_hash' => transfer_creator_hash($creatorKey),
+                    'max_bytes'        => transfer_max_bytes(),
+                    'max_files'        => transfer_max_files(),
+                    'created_ip'       => transfer_ip(),
+                    'created_at'       => now(),
+                    'expires_at'       => $expires,
+                ]);
+            } catch (PDOException $e) {
+                if ((string) $e->getCode() === '23000') {
+                    continue;
+                }
+                throw new RuntimeException('创建房间失败，请重试。');
+            }
+
+            $dir = transfer_room_dir($token);
+            if (!is_dir($dir) && !@mkdir($dir, 0700, true)) {
+                q_exec('DELETE FROM transfer_rooms WHERE id = ?', [$id]);
+                throw new RuntimeException('无法创建房间目录。');
+            }
+            $_SESSION['transfer_unlock'][$id] = true;
+
+            return [
+                'id'          => $id,
+                'token'       => $token,
+                'code'        => $code,
+                'creator_key' => $creatorKey,
+                'expires_at'  => $expires,
+            ];
+        }
+
+        throw new RuntimeException('创建房间失败，请重试。');
+    } finally {
+        q_val("SELECT RELEASE_LOCK('shiyun_transfer_create')");
+    }
 }
 
 function transfer_room_by_token(string $token): ?array
@@ -546,10 +577,12 @@ function transfer_upload_finish(array $room, string $uploadId): array
         }
     }
 
+    // 不回收 merging：并发重试会重复合并、重复扣容量、插出两个文件。
+    // 真正崩溃的 merging 会话由清理任务在 1 小时后回收。
     $claimed = q_exec(
         "UPDATE transfer_uploads SET status = 'merging', updated_at = ?
-          WHERE id = ? AND (status IN ('pending','uploading') OR (status = 'merging' AND updated_at < ?))",
-        [now(), (int) $session['id'], date('Y-m-d H:i:s', time() - 600)]
+          WHERE id = ? AND status IN ('pending','uploading')",
+        [now(), (int) $session['id']]
     );
     if ($claimed !== 1) {
         throw new RuntimeException('这次上传正在处理中，请稍候重试。');
@@ -724,6 +757,10 @@ function transfer_stream(array $room, array $file): never
         exit;
     }
 
+    // 10 GiB 级别的下载不能受 PHP 默认执行时限影响
+    @set_time_limit(0);
+    @ignore_user_abort(true);
+
     $size = (int) filesize($path);
     $start = 0;
     $end = max(0, $size - 1);
@@ -761,6 +798,9 @@ function transfer_stream(array $room, array $file): never
     }
     $left = $length;
     while ($left > 0 && !feof($fh)) {
+        if (connection_aborted()) {
+            break;
+        }
         $buf = fread($fh, min(8192, $left));
         if ($buf === false || $buf === '') {
             break;
