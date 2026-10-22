@@ -198,6 +198,21 @@
     text-align: center;
 }
 
+/* Lucide 的 <svg> 本身没有 width/height，只带 viewBox；不显式给尺寸会按
+   替换元素默认的 300×150 渲染，把上传区撑得特别大。 */
+.tp-drop > svg {
+    width: 30px;
+    height: 30px;
+    color: var(--signal-2);
+}
+
+.mbtn__ico {
+    width: 16px;
+    height: 16px;
+    vertical-align: -2px;
+    margin-right: 4px;
+}
+
 .tp-drop.is-hot { border-color: var(--signal-2); color: var(--ink); }
 .tp-drop__title { margin: 0; font-size: 0.92rem; }
 .tp-drop__hint { margin: 0; color: var(--dim-2); font-size: 0.78rem; }

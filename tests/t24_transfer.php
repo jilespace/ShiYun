@@ -310,6 +310,8 @@ check(str_contains($libSrc, '@set_time_limit(0)'), '下载流不设 PHP 执行�
 $transferCss = (string) file_get_contents(BASE_PATH . '/assets/css/transfer.css');
 check(preg_match('/\.tp\s*\{[^}]*z-index:\s*2/s', $transferCss) === 1,
     '临时传输页在背景画布之上（真实点击不被遮挡）');
+check(preg_match('/\.tp-drop\s*>\s*svg\s*\{[^}]*width:\s*30px/s', $transferCss) === 1,
+    '上传区图标尺寸受控（不会按 SVG 默认 300×150 撑大）');
 
 q_exec('DELETE FROM transfer_attempts WHERE ip = ?', ['198.51.100.23']);
 foreach ((array) glob($tmpRoot . '/*') as $p) {
