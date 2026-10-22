@@ -347,6 +347,7 @@ $entryLabel = $loggedIn ? '进入网盘'
                     <a href="<?= e(url('auth.register')) ?>">注册</a>
                 <?php endif; ?>
             <?php endif; ?>
+            <a href="<?= e(url('transfer.index')) ?>">临时传输</a>
             <a href="#">隐私政策</a>
             <a href="#">服务条款</a>
         </nav>

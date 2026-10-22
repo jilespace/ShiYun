@@ -225,6 +225,21 @@ $GLOBALS['config']['chunk_size'] = 5 * 1024 * 1024;
 $GLOBALS['config']['transfer_max_bytes'] = 1024 * 1024;
 $GLOBALS['config']['transfer_max_files'] = 200;
 
+echo "\n· 公开页\n";
+$routes = (string) file_get_contents(BASE_PATH . '/app/router.php');
+foreach (['transfer.index', 'transfer.room', 'transfer.create', 'transfer.join',
+          'transfer.upload_init', 'transfer.upload_chunk', 'transfer.upload_complete',
+          'transfer.download', 'transfer.close'] as $r) {
+    check(str_contains($routes, "'" . $r . "'"), '公开路由包含 ' . $r);
+}
+$view = (string) file_get_contents(BASE_PATH . '/app/views/transfer.php');
+check(str_contains($view, 'data-page="transfer"'), '首页视图标记页面');
+check(str_contains($view, 'data-create'), '首页有创建入口');
+check(str_contains($view, 'data-join'), '首页有取件码入口');
+$js = (string) file_get_contents(BASE_PATH . '/assets/js/transfer.js');
+check(str_contains($js, 'transfer.create') && str_contains($js, 'transfer.join'), '首页 JS 调用创建/加入');
+check(str_contains($js, 'localStorage'), '创建者 key 存 localStorage');
+
 q_exec('DELETE FROM transfer_attempts WHERE ip = ?', ['198.51.100.23']);
 foreach ((array) glob($tmpRoot . '/*') as $p) {
     transfer_rmdir($p);

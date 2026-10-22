@@ -165,6 +165,10 @@ $isStepAside = in_array($tab, ['forgot', 'reset', 'totp'], true);
                         这个空间是私人部署，不开放自助注册。
                     <?php endif; ?>
                 </p>
+
+                <p class="pane__foot">
+                    <a href="<?= e(url('transfer.index')) ?>">临时传输（免登录）</a>
+                </p>
             </div>
             <?php endif; ?>
 

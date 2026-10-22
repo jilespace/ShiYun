@@ -35,6 +35,20 @@ const PUBLIC_ROUTES = [
     'webdav.handle',
     'api.handle',
     'tasks.cron',
+    'transfer.index',
+    'transfer.room',
+    'transfer.create',
+    'transfer.join',
+    'transfer.unlock',
+    'transfer.files',
+    'transfer.upload_init',
+    'transfer.upload_chunk',
+    'transfer.upload_complete',
+    'transfer.upload_abort',
+    'transfer.download',
+    'transfer.close',
+    'transfer.file_delete',
+    'transfer.qr',
 ];
 
 /** 解析出 [模块, 动作] */
