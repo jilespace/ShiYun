@@ -14,7 +14,7 @@ if (!defined('BASE_PATH')) {
  * 「缺了什么就补什么」的判定在 db.php 的 db_migrate() 里，靠每次请求核对
  * information_schema 快照完成——不依赖这个号，所以忘了加一也不会漏迁移。
  */
-const SCHEMA_VERSION = 18;
+const SCHEMA_VERSION = 19;
 
 /** @return list<string> */
 function schema_statements(): array
@@ -485,6 +485,78 @@ function schema_statements(): array
             created_at    DATETIME        NOT NULL,
             PRIMARY KEY (id),
             KEY idx_objacct_user (user_id, id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL;
+
+    // ------------------------------------------------------------ 临时传输
+    $sql[] = <<<SQL
+        CREATE TABLE IF NOT EXISTS transfer_rooms (
+            id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            token            CHAR(48)        NOT NULL,
+            code             CHAR(6)         NOT NULL,
+            password_hash    VARCHAR(255)    NULL,
+            creator_key_hash CHAR(64)        NOT NULL,
+            max_bytes        BIGINT UNSIGNED NOT NULL,
+            used_bytes       BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            reserved_bytes   BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            max_files        INT UNSIGNED    NOT NULL,
+            file_count       INT UNSIGNED    NOT NULL DEFAULT 0,
+            created_ip       VARCHAR(45)     NOT NULL,
+            created_at       DATETIME        NOT NULL,
+            expires_at       DATETIME        NOT NULL,
+            last_access_at   DATETIME        NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY uk_transfer_token (token),
+            UNIQUE KEY uk_transfer_code (code),
+            KEY idx_transfer_expires (expires_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL;
+
+    $sql[] = <<<SQL
+        CREATE TABLE IF NOT EXISTS transfer_files (
+            id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            room_id       BIGINT UNSIGNED NOT NULL,
+            name          VARCHAR(255)    NOT NULL,
+            stored_name   CHAR(32)        NOT NULL,
+            size          BIGINT UNSIGNED NOT NULL,
+            mime          VARCHAR(128)    NULL,
+            uploader_name VARCHAR(40)     NULL,
+            created_at    DATETIME        NOT NULL,
+            PRIMARY KEY (id),
+            KEY idx_transfer_files_room (room_id, id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL;
+
+    $sql[] = <<<SQL
+        CREATE TABLE IF NOT EXISTS transfer_uploads (
+            id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            upload_id      CHAR(32)        NOT NULL,
+            room_id        BIGINT UNSIGNED NOT NULL,
+            filename       VARCHAR(255)    NOT NULL,
+            size           BIGINT UNSIGNED NOT NULL,
+            chunk_size     INT UNSIGNED    NOT NULL,
+            total_chunks   INT UNSIGNED    NOT NULL,
+            received       JSON            NULL,
+            received_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            uploader_name  VARCHAR(40)     NULL,
+            status         ENUM('pending','uploading','merging','done') NOT NULL DEFAULT 'pending',
+            created_at     DATETIME        NOT NULL,
+            updated_at     DATETIME        NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY uk_transfer_upload (upload_id),
+            KEY idx_transfer_upload_room (room_id, status, updated_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        SQL;
+
+    $sql[] = <<<SQL
+        CREATE TABLE IF NOT EXISTS transfer_attempts (
+            id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            ip         VARCHAR(45)     NOT NULL,
+            kind       ENUM('create','join') NOT NULL,
+            code       CHAR(6)         NULL,
+            created_at DATETIME        NOT NULL,
+            PRIMARY KEY (id),
+            KEY idx_transfer_attempt (ip, kind, created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         SQL;
 
