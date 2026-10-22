@@ -369,8 +369,10 @@ CREATE TABLE IF NOT EXISTS transfer_attempts (
 
 - `app/lib/transfer.php`：房间/文件/上传/清理领域逻辑
 - `app/modules/transfer.php`：公开路由与接口
-- `app/views/transfer.php`：创建/加入/房间页
-- `assets/js/transfer.js`
+- `app/views/transfer.php`：创建/加入页
+- `app/views/transfer_room.php`：房间页
+- `assets/js/transfer.js`：创建/加入交互
+- `assets/js/transfer_room.js`：房间轮询/上传/下载/创建者操作
 - `assets/css/transfer.css`
 - `tests/t24_transfer.php`
 
