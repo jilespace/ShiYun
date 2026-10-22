@@ -240,6 +240,14 @@ $js = (string) file_get_contents(BASE_PATH . '/assets/js/transfer.js');
 check(str_contains($js, 'transfer.create') && str_contains($js, 'transfer.join'), '首页 JS 调用创建/加入');
 check(str_contains($js, 'localStorage'), '创建者 key 存 localStorage');
 
+$roomView = (string) file_get_contents(BASE_PATH . '/app/views/transfer_room.php');
+check(str_contains($roomView, 'data-page="transfer-room"'), '房间视图标记页面');
+check(str_contains($roomView, 'data-files'), '房间视图有文件列表');
+$roomJs = (string) file_get_contents(BASE_PATH . '/assets/js/transfer_room.js');
+check(str_contains($roomJs, 'transfer.files') && str_contains($roomJs, 'transfer.upload_init'), '房间 JS 轮询并上传');
+check(str_contains($roomJs, 'transfer.ck.'), '房间 JS 读取创建者 key');
+check(str_contains($roomJs, 'transfer.download'), '房间 JS 生成下载链接');
+
 q_exec('DELETE FROM transfer_attempts WHERE ip = ?', ['198.51.100.23']);
 foreach ((array) glob($tmpRoot . '/*') as $p) {
     transfer_rmdir($p);
