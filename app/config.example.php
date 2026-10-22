@@ -79,6 +79,16 @@ return [
     'max_extract'  => 20 * 1024 ** 3,    // 在线解压上限
     'max_pack'     => 2 * 1024 ** 3,     // 打包下载总量上限
 
+    // ------------------------------------------------------------ 临时传输
+    // 免登录的双向临时房间；关闭后公开页仍在，但不能再建房。
+    'transfer_enabled'         => true,
+    'transfer_ttl_hours'       => 24,
+    'transfer_max_bytes'       => 10 * 1024 ** 3,
+    'transfer_max_files'       => 200,
+    'transfer_create_per_hour' => 5,
+    'transfer_code_attempts'   => 10,
+    'transfer_storage_path'    => BASE_PATH . '/runtime/transfer',
+
     // ---------------------------------------------------------------- 集成
     // 外部下载引擎（aria2 等）。未安装时离线下载仅支持 HTTP/FTP，BT/磁力会明确报错
     'aria2_rpc'    => '',   // 例如 http://127.0.0.1:6800/jsonrpc

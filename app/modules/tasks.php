@@ -349,6 +349,8 @@ function tasks_cron(): void
         $processed += tasks_tick($uid, max(1, (int) $left));
     }
 
+    transfer_reap_expired();
+
     json_ok([
         'processed' => $processed,
         'users'     => count($userIds),
