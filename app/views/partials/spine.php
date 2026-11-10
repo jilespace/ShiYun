@@ -17,7 +17,7 @@ $usedPct = $quota['total'] > 0 ? min(100, ($quota['used'] / $quota['total']) * 1
 $privateReady = private_space_ready((int) $user['id']);
 $privateOpen = Auth::privateUnlocked();
 ?>
-<aside class="spine" data-spine>
+<aside class="spine" data-spine id="app-nav">
     <a class="spine__brand" href="<?= e(url('files.list')) ?>">
         <?= lucide('archive', 'spine__mark') ?>
         <span class="spine__word">

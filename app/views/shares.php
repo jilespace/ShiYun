@@ -44,9 +44,11 @@ $permLabel = static fn (string $p): string => match ($p) {
 
             <div class="seg2" style="margin-bottom:18px">
                 <a href="<?= e(url('shares.list')) ?>"
-                   class="<?= $tab === 'shares' ? 'is-on' : '' ?>">分享链接</a>
+                   class="<?= $tab === 'shares' ? 'is-on' : '' ?>"
+                   <?= $tab === 'shares' ? 'aria-current="page"' : '' ?>>分享链接</a>
                 <a href="<?= e(url('shares.list', ['tab' => 'direct'])) ?>"
-                   class="<?= $tab === 'direct' ? 'is-on' : '' ?>">直链</a>
+                   class="<?= $tab === 'direct' ? 'is-on' : '' ?>"
+                   <?= $tab === 'direct' ? 'aria-current="page"' : '' ?>>直链</a>
             </div>
 
             <?php if ($tab === 'shares'): ?>
@@ -96,6 +98,7 @@ $permLabel = static fn (string $p): string => match ($p) {
                                 <?php foreach ($items as $s): ?>
                                     <?php
                                     $live = $s['status'] === 'active';
+                                    $isPrivate = !empty($s['node']['private']);
                                     $isFolder = ($s['node']['kind'] ?? 'file') === 'folder';
                                     ?>
                                     <tr>
@@ -125,8 +128,10 @@ $permLabel = static fn (string $p): string => match ($p) {
                                         <td>
                                             <div class="tbl__name tbl__link">
                                                 <code class="tbl__url" title="<?= e((string) $s['url']) ?>"><?= e((string) $s['url']) ?></code>
-                                                <button class="minibtn" type="button" data-share-copy="<?= e((string) $s['url']) ?>" aria-label="复制链接"><?= lucide('copy') ?></button>
-                                                <button class="minibtn" type="button" data-share-qr="<?= (int) $s['id'] ?>" aria-label="二维码"><?= lucide('qr-code') ?></button>
+                                                <?php if (!$isPrivate): ?>
+                                                    <button class="minibtn" type="button" data-share-copy="<?= e((string) $s['url']) ?>" aria-label="复制链接"><?= lucide('copy') ?></button>
+                                                    <button class="minibtn" type="button" data-share-qr="<?= (int) $s['id'] ?>" aria-label="二维码"><?= lucide('qr-code') ?></button>
+                                                <?php endif; ?>
                                             </div>
                                         </td>
                                         <td class="muted nowrap"><?= e((string) $s['expiresText']) ?></td>
@@ -139,9 +144,9 @@ $permLabel = static fn (string $p): string => match ($p) {
                                             <?php endif; ?>
                                         </td>
                                         <td>
-                                            <span class="pill<?= $live ? '' : ' pill--muted' ?>">
-                                                <span class="pill__dot" style="--pill:<?= $live ? '#4ad07a' : 'rgba(244,242,236,.32)' ?>"></span>
-                                                <?= $live ? '生效中' : (!empty($s['inboxFull']) ? '已收满' : '已失效') ?>
+                                            <span class="pill<?= ($live && !$isPrivate) ? '' : ' pill--muted' ?>">
+                                                <span class="pill__dot" style="--pill:<?= ($live && !$isPrivate) ? '#4ad07a' : 'rgba(244,242,236,.32)' ?>"></span>
+                                                <?= $isPrivate ? '私密内容' : ($live ? '生效中' : (!empty($s['inboxFull']) ? '已收满' : '已失效')) ?>
                                             </span>
                                         </td>
                                         <td>
@@ -229,6 +234,7 @@ $permLabel = static fn (string $p): string => match ($p) {
                                     // 三种状态：生效中 / 文件在回收站（直链返回 410）/ 已失效（撤销或过期）
                                     $dLive  = $d['active'] && !$d['nodeTrashed'];
                                     $dTrash = $d['active'] && $d['nodeTrashed'];
+                                    $dPrivate = !empty($d['node']['private']);
                                     ?>
                                     <tr>
                                         <td>
@@ -240,12 +246,14 @@ $permLabel = static fn (string $p): string => match ($p) {
                                         <td>
                                             <div class="tbl__name tbl__link">
                                                 <code class="tbl__url" title="<?= e((string) $d['url']) ?>"><?= e((string) $d['url']) ?></code>
-                                                <button class="minibtn" type="button"
-                                                        data-direct-copy="<?= e((string) $d['url']) ?>"
-                                                        aria-label="复制直链"><?= lucide('copy') ?></button>
-                                                <button class="minibtn" type="button"
-                                                        data-direct-copy="<?= e((string) $d['urlDownload']) ?>"
-                                                        aria-label="复制下载直链" title="下载直链（&amp;dl=1）"><?= lucide('download') ?></button>
+                                                <?php if (!$dPrivate): ?>
+                                                    <button class="minibtn" type="button"
+                                                            data-direct-copy="<?= e((string) $d['url']) ?>"
+                                                            aria-label="复制直链"><?= lucide('copy') ?></button>
+                                                    <button class="minibtn" type="button"
+                                                            data-direct-copy="<?= e((string) $d['urlDownload']) ?>"
+                                                            aria-label="复制下载直链" title="下载直链（&amp;dl=1）"><?= lucide('download') ?></button>
+                                                <?php endif; ?>
                                             </div>
                                         </td>
                                         <td class="muted nowrap"><?= $d['ipAllow'] !== '' ? e((string) $d['ipAllow']) : '不限' ?></td>
@@ -253,9 +261,9 @@ $permLabel = static fn (string $p): string => match ($p) {
                                         <td class="num"><?= (int) $d['hits'] ?></td>
                                         <td class="muted nowrap"><?= e((string) $d['lastAccess']) ?></td>
                                         <td>
-                                            <span class="pill<?= $dLive ? '' : ' pill--muted' ?>">
-                                                <span class="pill__dot" style="--pill:<?= $dLive ? '#4ad07a' : 'rgba(244,242,236,.32)' ?>"></span>
-                                                <?= $dLive ? '生效中' : ($dTrash ? '文件在回收站' : '已失效') ?>
+                                            <span class="pill<?= ($dLive && !$dPrivate) ? '' : ' pill--muted' ?>">
+                                                <span class="pill__dot" style="--pill:<?= ($dLive && !$dPrivate) ? '#4ad07a' : 'rgba(244,242,236,.32)' ?>"></span>
+                                                <?= $dPrivate ? '私密内容' : ($dLive ? '生效中' : ($dTrash ? '文件在回收站' : '已失效')) ?>
                                             </span>
                                         </td>
                                         <td>

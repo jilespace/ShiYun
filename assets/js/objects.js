@@ -82,6 +82,11 @@
             + escapeHtml(a.name) + ' · ' + escapeHtml((state.providers[a.provider] || a.provider)) + '</option>'
         ).join('');
         const has = state.accounts.length > 0;
+        // 没有账号时，空下拉和「编辑 / 测试连接」只会占着页头
+        el.select.hidden = !has;
+        $('[data-account-new-head]')?.toggleAttribute('hidden', !has);
+        $('[data-account-edit]')?.toggleAttribute('hidden', !has);
+        $('[data-account-test]')?.toggleAttribute('hidden', !has);
         el.noAccount?.toggleAttribute('hidden', has);
         el.bucketView?.toggleAttribute('hidden', !has || !!state.bucket);
         el.detailView?.toggleAttribute('hidden', !state.bucket);
@@ -314,7 +319,9 @@
         const settingsTab = $('[data-tab="settings"]');
         if (objectsTab && settingsTab) {
             objectsTab.classList.add('is-on');
+            objectsTab.setAttribute('aria-selected', 'true');
             settingsTab.classList.remove('is-on');
+            settingsTab.setAttribute('aria-selected', 'false');
         }
         $$('[data-tab-panel]').forEach((panel) => {
             panel.toggleAttribute('hidden', panel.dataset.tabPanel !== 'objects');
@@ -1173,7 +1180,10 @@
     $$('[data-tab]').forEach((tab) => tab.addEventListener('click', (e) => {
         e.preventDefault();
         const name = tab.dataset.tab;
-        $$('[data-tab]').forEach((t) => t.classList.toggle('is-on', t === tab));
+        $$('[data-tab]').forEach((t) => {
+            t.classList.toggle('is-on', t === tab);
+            t.setAttribute('aria-selected', String(t === tab));
+        });
         $$('[data-tab-panel]').forEach((panel) => {
             panel.toggleAttribute('hidden', panel.dataset.tabPanel !== name);
         });

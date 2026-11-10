@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Shiyun\Lib\Locations;
+
 if (!defined('BASE_PATH')) {
     http_response_code(404);
     exit;
@@ -74,9 +76,9 @@ function blob_release(?int $blobId): void
         }
 
         // 引用归零：记下所有远程位置，再连同本地一起清掉
-        $locations = blob_locations_of_blob($blobId);
+        $locations = Locations::ofBlob($blobId);
         foreach ($locations as $loc) {
-            blob_location_forget((int) $loc['id']);
+            Locations::forget((int) $loc['id']);
         }
         q_exec('DELETE FROM blobs WHERE id = ?', [$blobId]);
 
@@ -90,6 +92,11 @@ function blob_release(?int $blobId): void
     $path = blob_path($result['hash']);
     if (is_file($path)) {
         @unlink($path);
+    }
+    // 缩略图只按内容哈希存在；引用归零后不清就是永久的孤儿文件。
+    $thumb = thumb_path($result['hash']);
+    if (is_file($thumb)) {
+        @unlink($thumb);
     }
 
     // 远程删除走队列：清空回收站可能有几十个 COS 对象，同步做会卡住请求
@@ -211,7 +218,7 @@ function blob_push_to_source(int $blobId, int $sourceId): array
         return ['ok' => false, 'skipped' => false, 'error' => '内容不存在'];
     }
 
-    $existing = blob_location_find($blobId, $sourceId);
+    $existing = Locations::find($blobId, $sourceId);
     if ($existing !== null && (string) $existing['status'] === 'ok') {
         return ['ok' => true, 'skipped' => true, 'error' => ''];
     }
@@ -219,19 +226,19 @@ function blob_push_to_source(int $blobId, int $sourceId): array
     $hash = (string) $blob['hash'];
     $path = blob_path($hash);
     if (!is_file($path)) {
-        blob_location_mark_failed($blobId, $sourceId, '本地副本不存在');
+        Locations::markFailed($blobId, $sourceId, '本地副本不存在');
         return ['ok' => false, 'skipped' => false, 'error' => '本地副本不存在'];
     }
 
     $key = substr($hash, 0, 2) . '/' . $hash;
-    blob_location_record($blobId, $sourceId, $key, (int) $blob['size']);
+    Locations::record($blobId, $sourceId, $key, (int) $blob['size']);
 
     try {
         $storedKey = storage_source_put($source, $hash, $path);
-        blob_location_mark_ok($blobId, $sourceId, $storedKey);
+        Locations::markOk($blobId, $sourceId, $storedKey);
         return ['ok' => true, 'skipped' => false, 'error' => ''];
     } catch (Throwable $e) {
-        blob_location_mark_failed($blobId, $sourceId, $e->getMessage());
+        Locations::markFailed($blobId, $sourceId, $e->getMessage());
         return ['ok' => false, 'skipped' => false, 'error' => $e->getMessage()];
     }
 }
@@ -250,7 +257,7 @@ function blob_direct_url(int $userId, int $blobId, string $mime, string $filenam
     // 少了这一行，302 路径会把 text/html 之类当成 inline 发出去。
     $disposition = mime_inline_ok($mime) ? $disposition : 'attachment';
 
-    $loc = blob_location_direct($userId, $blobId);
+    $loc = Locations::direct($userId, $blobId);
     if ($loc === null) {
         return null;
     }
@@ -265,7 +272,7 @@ function blob_direct_url(int $userId, int $blobId, string $mime, string $filenam
         'timeout'      => 3,
     ]);
     if ($head['status'] < 200 || $head['status'] >= 400) {
-        blob_location_mark_stale((int) $loc['id'], 'HEAD ' . $head['status']
+        Locations::markStale((int) $loc['id'], 'HEAD ' . $head['status']
             . ($head['status'] === 0 && $head['body'] !== '' ? '（' . mb_substr((string) $head['body'], 0, 160) . '）' : ''));
         return null;
     }

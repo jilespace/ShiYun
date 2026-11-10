@@ -27,93 +27,10 @@ $viewMode = (string) ($settings['view_mode'] ?? 'list');
 $showHidden = (bool) ($settings['show_hidden'] ?? false);
 $isTrash = $section === 'trash';
 $isFav = $section === 'favorites';
+// 回收站固定按删除时间、收藏固定按更新时间，表头不提供排序
+$sortable = !$isTrash && !$isFav;
 
-/** 渲染一行文件 */
-$renderRow = static function (array $n) use ($isTrash): string {
-    $isFolder = $n['kind'] === 'folder';
-    $href = $isFolder
-        ? url('files.list', ['folder' => (int) $n['id']])
-        : url('preview.open', ['id' => (int) $n['id']]);
-
-    $badges = '';
-    if ($n['locked']) {
-        $badges .= '<span class="badge" title="已锁定">' . lucide('lock', 'badge__ico') . '</span>';
-    }
-    if ($n['hidden']) {
-        $badges .= '<span class="badge" title="已隐藏">' . lucide('eye-off', 'badge__ico') . '</span>';
-    }
-    if ($n['favorite']) {
-        $badges .= '<span class="badge badge--star" title="已收藏">' . lucide('star', 'badge__ico') . '</span>';
-    }
-    if (($n['shareCount'] ?? 0) > 0) {
-        $badges .= '<span class="badge" title="已分享">' . lucide('link-2', 'badge__ico') . '</span>';
-    }
-    if (($n['memberCount'] ?? 0) > 0) {
-        $badges .= '<span class="badge" title="协作中">' . lucide('users', 'badge__ico') . '</span>';
-    }
-    if (($n['cosStatus'] ?? '') !== '') {
-        [$cosIco, $cosTitle] = match ((string) $n['cosStatus']) {
-            'ok'      => ['check-circle', 'COS 已同步'],
-            'pending' => ['refresh-cw', 'COS 推送中'],
-            'failed'  => ['circle-alert', 'COS 推送失败'],
-            'stale'   => ['alert-triangle', 'COS 副本失效'],
-            default   => ['cloud', 'COS 副本'],
-        };
-        $badges .= '<span class="badge badge--cos badge--cos-' . e((string) $n['cosStatus']) . '" title="' . e($cosTitle) . '">' . lucide($cosIco, 'badge__ico') . '</span>';
-    }
-
-    $tagChips = '';
-    foreach (array_slice($n['tags'] ?? [], 0, 3) as $tag) {
-        $tagChips .= '<span class="chip" style="--chip:' . e((string) $tag['color']) . '">'
-            . e((string) $tag['name']) . '</span>';
-    }
-
-    $colorDot = $n['color'] !== null
-        ? '<span class="row__color" style="--dot:' . e((string) $n['color']) . '"></span>'
-        : '';
-
-    $name = $isTrash
-        ? '<span class="row__name row__name--static">' . e((string) $n['name']) . '</span>'
-        : '<a class="row__name" href="' . e($href) . '" data-name-link>' . e((string) $n['name']) . '</a>';
-
-    return '<li class="row" data-id="' . (int) $n['id'] . '" data-kind="' . e($n['kind']) . '"'
-        . ' data-name="' . e((string) $n['name']) . '" data-type="' . e($n['type']) . '">'
-        . '<span class="row__pick"><input type="checkbox" class="pick" aria-label="选择 ' . e((string) $n['name']) . '"></span>'
-        . '<span class="row__main">'
-        . '<span class="row__icon row__icon--' . e($n['type']) . '">' . lucide($n['icon']) . '</span>'
-        . $name . $colorDot . $badges . $tagChips
-        . '</span>'
-        . '<span class="row__size">' . ($isFolder ? (int) $n['childCount'] . ' 项' : e((string) $n['sizeText'])) . '</span>'
-        . '<span class="row__time">' . e($isTrash ? (string) $n['deleted'] : (string) $n['updatedText']) . '</span>'
-        . '<span class="row__act">'
-        . '<button class="iconbtn" type="button" data-menu aria-label="更多操作">' . lucide('more-horizontal') . '</button>'
-        . '</span>'
-        . '</li>';
-};
-
-/** 渲染一格文件 */
-$renderCard = static function (array $n) use ($isTrash): string {
-    $isFolder = $n['kind'] === 'folder';
-    $href = $isFolder
-        ? url('files.list', ['folder' => (int) $n['id']])
-        : url('preview.open', ['id' => (int) $n['id']]);
-
-    $art = $n['hasThumb']
-        ? '<img src="' . e(url('preview.thumb', ['id' => (int) $n['id']])) . '" alt="" loading="lazy" decoding="async">'
-        : lucide($n['icon'], 'card__glyph');
-
-    return '<li class="card" data-id="' . (int) $n['id'] . '" data-kind="' . e($n['kind']) . '"'
-        . ' data-name="' . e((string) $n['name']) . '" data-type="' . e($n['type']) . '">'
-        . '<span class="card__pick"><input type="checkbox" class="pick" aria-label="选择 ' . e((string) $n['name']) . '"></span>'
-        . '<a class="card__body" href="' . e($isTrash ? '#' : $href) . '"' . ($isTrash ? '' : ' data-name-link') . '>'
-        . '<span class="card__art card__art--' . e($n['type']) . '">' . $art . '</span>'
-        . '<span class="card__name">' . e((string) $n['name']) . '</span>'
-        . '<span class="card__meta">' . ($isFolder ? (int) $n['childCount'] . ' 项' : e((string) $n['sizeText']))
-        . ' · ' . e($isTrash ? (string) $n['deleted'] : (string) $n['updatedText']) . '</span>'
-        . '</a>'
-        . '<button class="iconbtn card__menu" type="button" data-menu aria-label="更多操作">' . lucide('more-horizontal') . '</button>'
-        . '</li>';
-};
+/* 行/卡片的标记收敛在 Shiyun\Lib\NodeView（app/lib/NodeView.php）。 */
 
 /** 上传目标：本地磁盘 + 本人可用的 COS(s3) 源。
     不再放工具栏（下拉又丑又对不齐），改为上传时在弹窗里选；这里只把候选交给前端。 */
@@ -122,15 +39,18 @@ $uploadChoices = array_merge(
     array_map(static fn (array $s): array => ['id' => (int) $s['id'], 'name' => (string) $s['name']], $uploadSources)
 );
 
+/** 视图切换。桌面放在顶栏；窄屏顶栏放不下，改为在轨迹栏里显示（见 CSS）。 */
+$viewSeg = '<div class="seg" role="group" aria-label="视图切换">'
+    . '<button class="seg__btn' . ($viewMode === 'list' ? ' is-on' : '') . '" type="button" data-view-set="list" aria-pressed="' . ($viewMode === 'list' ? 'true' : 'false') . '" aria-label="列表视图" title="列表视图">' . lucide('list') . '</button>'
+    . '<button class="seg__btn' . ($viewMode === 'grid' ? ' is-on' : '') . '" type="button" data-view-set="grid" aria-pressed="' . ($viewMode === 'grid' ? 'true' : 'false') . '" aria-label="网格视图" title="网格视图">' . lucide('layout-grid') . '</button>'
+    . '</div>';
+
 /** 顶栏工具 */
 $barTools = '';
 if (!$isTrash) {
     $barTools = '<button class="ghost" type="button" data-upload-trigger>'
         . lucide('cloud-upload', 'ghost__ico') . '<span>上传</span></button>'
-        . '<div class="seg" role="group" aria-label="视图切换">'
-        . '<button class="seg__btn' . ($viewMode === 'list' ? ' is-on' : '') . '" type="button" data-view-set="list" aria-pressed="' . ($viewMode === 'list' ? 'true' : 'false') . '" aria-label="列表视图">' . lucide('list') . '</button>'
-        . '<button class="seg__btn' . ($viewMode === 'grid' ? ' is-on' : '') . '" type="button" data-view-set="grid" aria-pressed="' . ($viewMode === 'grid' ? 'true' : 'false') . '" aria-label="网格视图">' . lucide('layout-grid') . '</button>'
-        . '</div>'
+        . $viewSeg
         . '<button class="iconbtn" type="button" data-hidden-toggle aria-pressed="' . ($showHidden ? 'true' : 'false')
         . '" aria-label="显示隐藏文件" title="显示隐藏文件">' . lucide($showHidden ? 'eye' : 'eye-off') . '</button>';
 }
@@ -156,9 +76,9 @@ if (!$isTrash) {
                         <?php $last = $i === count($crumbs) - 1; ?>
                         <?php if ($i > 0): ?><?= lucide('chevron-right', 'crumbs__sep') ?><?php endif; ?>
                         <?php if ($last): ?>
-                            <span class="crumbs__here" aria-current="page"><?= e((string) $crumb['name']) ?></span>
+                            <span class="crumbs__here" aria-current="page" title="<?= e((string) $crumb['name']) ?>"><?= e((string) $crumb['name']) ?></span>
                         <?php else: ?>
-                            <a class="crumbs__link" href="<?= e(url('files.list', ['folder' => (int) $crumb['id']])) ?>"><?= e((string) $crumb['name']) ?></a>
+                            <a class="crumbs__link" href="<?= e(url('files.list', ['folder' => (int) $crumb['id']])) ?>" title="<?= e((string) $crumb['name']) ?>"><?= e((string) $crumb['name']) ?></a>
                         <?php endif; ?>
                     <?php endforeach; ?>
                 <?php endif; ?>
@@ -180,31 +100,35 @@ if (!$isTrash) {
                         <?= lucide('trash-2', 'ghost__ico') ?><span>清空回收站</span>
                     </button>
                 <?php else: ?>
+                    <span class="trail__view"><?= $viewSeg ?></span>
                     <button class="ghost ghost--sm" type="button" data-new-folder>
                         <?= lucide('folder-plus', 'ghost__ico') ?><span>新建文件夹</span>
                     </button>
                     <button class="ghost ghost--sm" type="button" data-upload-folder>
                         <?= lucide('folder', 'ghost__ico') ?><span>上传文件夹</span>
                     </button>
-                    <div class="sortwrap">
-                        <button class="ghost ghost--sm" type="button" data-sort-btn aria-haspopup="menu" aria-expanded="false">
-                            <?= lucide('arrow-up-down', 'ghost__ico') ?><span data-sort-label><?php
-                                echo e(['name' => '名称', 'time' => '修改时间', 'size' => '大小', 'type' => '类型'][$opts['sort']] ?? '名称');
-                            ?></span>
-                        </button>
-                        <div class="sortmenu" data-sort-menu hidden role="menu">
-                            <?php foreach (['name' => '名称', 'time' => '修改时间', 'size' => '大小', 'type' => '类型'] as $key => $label): ?>
-                                <button type="button" role="menuitem" data-sort-key="<?= e($key) ?>"
-                                        class="<?= $opts['sort'] === $key ? 'is-on' : '' ?>">
-                                    <span><?= e($label) ?></span>
-                                    <?php /* 方向箭头只属于当前排序项——每项都挂一个 ↑ 会让方向失去意义 */ ?>
-                                    <?php if ($opts['sort'] === $key): ?>
-                                        <?= lucide($opts['dir'] === 'desc' ? 'arrow-down' : 'arrow-up', 'sortmenu__ico') ?>
-                                    <?php endif; ?>
-                                </button>
-                            <?php endforeach; ?>
+                    <?php /* 收藏固定按最近更新排列，不提供排序菜单 */ ?>
+                    <?php if (!$isFav): ?>
+                        <div class="sortwrap">
+                            <button class="ghost ghost--sm" type="button" data-sort-btn aria-haspopup="menu" aria-expanded="false">
+                                <?= lucide('arrow-up-down', 'ghost__ico') ?><span data-sort-label><?php
+                                    echo e(['name' => '名称', 'time' => '修改时间', 'size' => '大小', 'type' => '类型'][$opts['sort']] ?? '名称');
+                                ?></span>
+                            </button>
+                            <div class="sortmenu" data-sort-menu hidden role="menu">
+                                <?php foreach (['name' => '名称', 'time' => '修改时间', 'size' => '大小', 'type' => '类型'] as $key => $label): ?>
+                                    <button type="button" role="menuitem" data-sort-key="<?= e($key) ?>"
+                                            class="<?= $opts['sort'] === $key ? 'is-on' : '' ?>">
+                                        <span><?= e($label) ?></span>
+                                        <?php /* 方向箭头只属于当前排序项——每项都挂一个 ↑ 会让方向失去意义 */ ?>
+                                        <?php if ($opts['sort'] === $key): ?>
+                                            <?= lucide($opts['dir'] === 'desc' ? 'arrow-down' : 'arrow-up', 'sortmenu__ico') ?>
+                                        <?php endif; ?>
+                                    </button>
+                                <?php endforeach; ?>
+                            </div>
                         </div>
-                    </div>
+                    <?php endif; ?>
                 <?php endif; ?>
             </div>
         </div>
@@ -235,22 +159,28 @@ if (!$isTrash) {
         <div class="listwrap" data-listwrap>
             <div class="listhead" data-listhead>
                 <span class="listhead__pick"><input type="checkbox" class="pick" data-pick-all aria-label="全选"></span>
-                <button class="listhead__col listhead__col--name" type="button" data-sort-key="name">名称</button>
-                <button class="listhead__col listhead__col--size" type="button" data-sort-key="size">大小</button>
-                <button class="listhead__col listhead__col--time" type="button" data-sort-key="time"><?= $isTrash ? '删除时间' : '修改时间' ?></button>
+                <button class="listhead__col listhead__col--name" type="button" data-sort-key="name"<?= $sortable ? '' : ' disabled' ?>>名称</button>
+                <button class="listhead__col listhead__col--size" type="button" data-sort-key="size"<?= $sortable ? '' : ' disabled' ?>>大小</button>
+                <button class="listhead__col listhead__col--time" type="button" data-sort-key="time"<?= $sortable ? '' : ' disabled' ?>><?= $isTrash ? '删除时间' : ($isFav ? '更新时间' : '修改时间') ?></button>
                 <span class="listhead__col listhead__col--act"></span>
             </div>
 
+            <?php /* 只渲染当前视图：两种视图同时铺 300 项会让首屏 HTML 翻倍；
+                     另一视图由 files.js 在切换时向 files.data 取片段。 */ ?>
             <ul class="rows" data-rows>
-                <?php foreach ($children as $i => $n): ?>
-                    <?php $row = $renderRow($n); echo str_replace('class="row"', 'class="row" style="--i:' . $i . '"', $row); ?>
-                <?php endforeach; ?>
+                <?php if ($viewMode !== 'grid'): ?>
+                    <?php foreach ($children as $i => $n): ?>
+                        <?= \Shiyun\Lib\NodeView::row($n, (int) $i, $isTrash) ?>
+                    <?php endforeach; ?>
+                <?php endif; ?>
             </ul>
 
             <ul class="cards" data-cards>
-                <?php foreach ($children as $i => $n): ?>
-                    <?php echo str_replace('class="card"', 'class="card" style="--i:' . $i . '"', $renderCard($n)); ?>
-                <?php endforeach; ?>
+                <?php if ($viewMode === 'grid'): ?>
+                    <?php foreach ($children as $i => $n): ?>
+                        <?= \Shiyun\Lib\NodeView::card($n, (int) $i, $isTrash) ?>
+                    <?php endforeach; ?>
+                <?php endif; ?>
             </ul>
 
             <div class="listfoot" data-listfoot<?= $children === [] ? ' hidden' : '' ?>>

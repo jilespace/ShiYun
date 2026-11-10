@@ -234,10 +234,33 @@ body.is-app {
 /* ------------------------------------------------------------------ 主区 */
 
 .stage {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+}
+
+/* 目录切换（AJAX）时在顶栏下方扫过一条强调线。
+   比把整块列表压暗更轻，也让「正在取数据」这件事有明确的时间感。 */
+.app.is-loading .stage::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 8;
+    width: 40%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--signal-2), transparent);
+    transform: translateX(-100%);
+    animation: loadSweep 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    pointer-events: none;
+}
+
+@keyframes loadSweep {
+    to {
+        transform: translateX(350%);
+    }
 }
 
 .bar {
@@ -261,6 +284,8 @@ body.is-app {
     align-items: center;
     gap: 9px;
     flex: 1;
+    /* 表单默认按输入框的固有宽度撑开，窄屏会把右侧工具挤出屏幕 */
+    min-width: 0;
     max-width: 520px;
     height: 36px;
     padding: 0 12px;
@@ -333,10 +358,16 @@ body.is-app {
     -webkit-appearance: none;
     appearance: none;
     cursor: pointer;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.select:hover {
+    border-color: rgba(244, 242, 236, 0.36);
 }
 
 .select:focus {
     border-color: var(--signal-2);
+    box-shadow: 0 0 0 3px rgba(61, 58, 255, 0.13);
 }
 
 /* 分段控件 */
@@ -345,6 +376,7 @@ body.is-app {
     padding: 2px;
     border: 1px solid var(--line);
     border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.015);
 }
 
 .seg__btn {
@@ -357,7 +389,8 @@ body.is-app {
     background: transparent;
     color: var(--dim-2);
     cursor: pointer;
-    transition: color 0.18s ease, background 0.18s ease;
+    transition: color 0.18s ease, background 0.18s ease, transform 0.12s ease,
+        box-shadow 0.18s ease;
 }
 
 .seg__btn svg {
@@ -367,6 +400,20 @@ body.is-app {
 
 .seg__btn:hover {
     color: var(--ink);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.seg__btn:active {
+    transform: scale(0.93);
+}
+
+.seg__btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.seg__btn:disabled:hover {
+    background: transparent;
 }
 
 /* 上传弹窗里的「存到」：文字按钮，铺满宽度。
@@ -404,8 +451,13 @@ body.is-app {
 }
 
 .seg__btn.is-on {
-    background: rgba(255, 255, 255, 0.09);
+    background: rgba(138, 136, 255, 0.15);
     color: var(--ink);
+    box-shadow: inset 0 0 0 1px rgba(138, 136, 255, 0.22);
+}
+
+.seg__btn.is-on:hover {
+    background: rgba(138, 136, 255, 0.2);
 }
 
 .iconbtn .dot {
@@ -434,11 +486,16 @@ body.is-app {
     background: transparent;
     color: var(--ink);
     cursor: pointer;
-    transition: border-color 0.2s ease;
+    transition: border-color 0.2s ease, background 0.2s ease, transform 0.12s ease;
 }
 
 .who__btn:hover {
     border-color: var(--signal-2);
+    background: rgba(138, 136, 255, 0.08);
+}
+
+.who__btn:active {
+    transform: scale(0.94);
 }
 
 .who__avatar {
@@ -514,6 +571,11 @@ body.is-app {
     background: rgba(255, 255, 255, 0.06);
 }
 
+.who__menu a:active,
+.who__menu button:active {
+    background: rgba(255, 255, 255, 0.1);
+}
+
 .who__ico {
     width: 15px;
     height: 15px;
@@ -577,6 +639,11 @@ body.is-app {
     margin-left: auto;
 }
 
+/* 视图切换在窄屏才搬到轨迹栏（顶栏放不下整排工具） */
+.trail__view {
+    display: none;
+}
+
 .ghost--sm {
     height: 32px;
     padding: 0 11px;
@@ -630,6 +697,10 @@ body.is-app {
     background: rgba(255, 255, 255, 0.06);
 }
 
+.sortmenu button:active {
+    background: rgba(255, 255, 255, 0.1);
+}
+
 .sortmenu button.is-on {
     color: var(--signal-2);
 }
@@ -679,22 +750,37 @@ body.is-app {
     gap: 6px;
     height: 30px;
     padding: 0 10px;
-    border: 1px solid var(--line-2);
+    border: 1px solid var(--line);
     border-radius: var(--radius-sm);
-    background: transparent;
+    background: rgba(255, 255, 255, 0.015);
     color: var(--dim);
     font-family: inherit;
     font-size: 0.78rem;
     /* 表格里空间紧张时，浏览器会把按钮文字逐字折断成竖排——按钮永远不折行 */
     white-space: nowrap;
     cursor: pointer;
-    transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+    transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease,
+        transform 0.12s ease;
 }
 
 .chipbtn:hover {
     color: var(--ink);
     border-color: rgba(244, 242, 236, 0.34);
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.chipbtn:active {
+    transform: translateY(1px);
+}
+
+.chipbtn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.chipbtn:disabled:hover {
+    border-color: var(--line);
+    background: rgba(255, 255, 255, 0.015);
 }
 
 .chipbtn__ico {
@@ -710,6 +796,7 @@ body.is-app {
 
 .chipbtn--quiet {
     border-color: transparent;
+    background: transparent;
     color: var(--dim-2);
 }
 
@@ -720,6 +807,7 @@ body.is-app {
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    overscroll-behavior: contain;
     padding: 0 clamp(16px, 2.4vw, 30px) 40px;
 }
 
@@ -762,6 +850,14 @@ body.is-app {
     color: var(--ink);
 }
 
+.listhead__col:disabled {
+    cursor: default;
+}
+
+.listhead__col:disabled:hover {
+    color: var(--dim-2);
+}
+
 .listhead__col--name {
     flex: 1;
     min-width: 0;
@@ -796,7 +892,9 @@ body.is-app {
     height: var(--row);
     border-bottom: 1px solid rgba(244, 242, 236, 0.055);
     animation: rowIn 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
-    animation-delay: calc(var(--i, 0) * 14ms);
+    /* 延迟必须封顶：一页最多 300 行，按 i*14ms 排队时最后一行要 4 秒才出现，
+       而且会有 300 个同时挂着的动画。前 12 行错开即可，其余一起到位。 */
+    animation-delay: calc(min(var(--i, 0), 12) * 14ms);
 }
 
 @keyframes rowIn {
@@ -959,11 +1057,20 @@ body.is-app {
     border-radius: 3px;
     background: transparent;
     cursor: pointer;
-    transition: border-color 0.16s ease, background 0.16s ease;
+    transition: border-color 0.16s ease, background 0.16s ease, transform 0.12s ease;
 }
 
 .pick:hover {
     border-color: rgba(244, 242, 236, 0.42);
+}
+
+.pick:active {
+    transform: scale(0.9);
+}
+
+.pick:focus-visible {
+    outline: 2px solid var(--signal-2);
+    outline-offset: 2px;
 }
 
 .pick:checked {
@@ -980,6 +1087,21 @@ body.is-app {
     border: solid #fff;
     border-width: 0 1.6px 1.6px 0;
     transform: rotate(43deg);
+}
+
+/* 全选框的「部分选中」：appearance:none 下浏览器不会自己画横线 */
+.pick:indeterminate {
+    border-color: var(--signal);
+    background: var(--signal);
+}
+
+.pick:indeterminate::after {
+    content: "";
+    display: block;
+    width: 7px;
+    height: 0;
+    margin: 6px auto 0;
+    border-top: 1.6px solid #fff;
 }
 
 /* ------------------------------------------------------------ 网格 */
@@ -1009,7 +1131,7 @@ body.is-app {
     background: rgba(255, 255, 255, 0.016);
     transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     animation: rowIn 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
-    animation-delay: calc(var(--i, 0) * 16ms);
+    animation-delay: calc(min(var(--i, 0), 12) * 16ms);
 }
 
 .card:hover {
@@ -1031,6 +1153,7 @@ body.is-app {
 }
 
 .card__art {
+    position: relative;
     display: grid;
     place-items: center;
     aspect-ratio: 4 / 3;
@@ -1040,14 +1163,51 @@ body.is-app {
     color: var(--dim-2);
 }
 
+/* 类型色只在图标周围晕开一小片，卡片整体仍是近黑；既区分类型，又不破坏
+   「精度仪器」的克制感。图片卡自带内容，不需要这层。 */
+.card__art::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(90% 80% at 50% 42%, var(--art-wash, transparent), transparent 72%);
+    pointer-events: none;
+}
+
+.card__art--folder { --art-wash: color-mix(in srgb, var(--signal-2) 9%, transparent); }
+.card__art--image { --art-wash: color-mix(in srgb, var(--kind-image) 13%, transparent); }
+.card__art--video { --art-wash: color-mix(in srgb, var(--kind-video) 13%, transparent); }
+.card__art--audio { --art-wash: color-mix(in srgb, var(--kind-audio) 12%, transparent); }
+.card__art--document { --art-wash: color-mix(in srgb, var(--kind-document) 12%, transparent); }
+.card__art--archive { --art-wash: color-mix(in srgb, var(--kind-archive) 12%, transparent); }
+.card__art--code { --art-wash: color-mix(in srgb, var(--kind-code) 12%, transparent); }
+
 .card__art img {
+    position: relative;
+    z-index: 1;
     width: 100%;
     height: 100%;
     object-fit: cover;
     display: block;
+    transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.card:hover .card__art img {
+    transform: scale(1.035);
+}
+
+/* 图片底边压一道暗角，给下方文件名留出落点 */
+.card__art--image::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background: linear-gradient(180deg, rgba(8, 9, 11, 0) 58%, rgba(8, 9, 11, 0.42));
+    pointer-events: none;
 }
 
 .card__glyph {
+    position: relative;
+    z-index: 1;
     width: 34px;
     height: 34px;
     opacity: 0.6;
@@ -1227,6 +1387,7 @@ body.is-app {
     padding: 6px;
     max-height: 42vh;
     overflow-y: auto;
+    overscroll-behavior: contain;
 }
 
 .qitem {
@@ -1315,12 +1476,16 @@ body.is-app {
     background: transparent;
     color: var(--dim-2);
     cursor: pointer;
-    transition: color 0.16s ease, background 0.16s ease;
+    transition: color 0.16s ease, background 0.16s ease, transform 0.12s ease;
 }
 
 .minibtn:hover {
     color: var(--ink);
     background: rgba(255, 255, 255, 0.07);
+}
+
+.minibtn:active {
+    transform: scale(0.9);
 }
 
 .minibtn svg {
@@ -1428,6 +1593,10 @@ body.is-app {
     background: rgba(255, 255, 255, 0.05);
 }
 
+.tree__item:active {
+    background: rgba(255, 255, 255, 0.09);
+}
+
 .tree__item.is-on {
     color: var(--ink);
     background: rgba(61, 58, 255, 0.14);
@@ -1520,6 +1689,10 @@ body.is-app {
     background: rgba(255, 255, 255, 0.07);
 }
 
+.ctxmenu button:active {
+    background: rgba(255, 255, 255, 0.12);
+}
+
 .ctxmenu button svg {
     width: 14px;
     height: 14px;
@@ -1565,12 +1738,15 @@ body.is-app {
         bottom: 0;
         z-index: 70;
         width: 244px;
+        visibility: hidden;
         transform: translateX(-100%);
-        transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), visibility 0s linear 0.3s;
     }
 
     .app.is-nav-open .spine {
+        visibility: visible;
         transform: translateX(0);
+        transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), visibility 0s;
         box-shadow: 0 0 0 100vmax rgba(5, 6, 8, 0.6);
     }
 
@@ -1600,6 +1776,18 @@ body.is-app {
 
     .bar__tools .ghost span {
         display: none;
+    }
+
+    /* 390px 宽时整排工具会把搜索框和右侧控件挤出屏幕。
+       顶栏只留上传 / 队列 / 账户，视图切换移到轨迹栏。 */
+    .bar__tools .seg,
+    .bar__tools [data-hidden-toggle],
+    .bar__tools .bar__settings {
+        display: none;
+    }
+
+    .trail__view {
+        display: inline-flex;
     }
 
     .queue {

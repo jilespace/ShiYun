@@ -13,6 +13,7 @@ if (!defined('BASE_PATH')) {
 /** @var array|null $node */
 /** @var string|null $owner */
 /** @var list<array> $listing */
+/** @var bool $listingMore */
 /** @var list<array> $crumbs */
 /** @var int $current */
 /** @var int $rootId */
@@ -29,7 +30,7 @@ $canUpload = in_array((string) ($share['permission'] ?? ''), SHARE_UPLOAD_PERMIS
 // 不兜底会让过期链接的落地页直接 500，而不是显示「分享不存在」。
 $crumbs = array_values(array_filter($crumbs ?? [], static fn (array $c): bool => (int) $c['id'] !== 0));
 ?>
-<div class="sharewrap">
+<main class="sharewrap">
     <div class="sharebrand">
         <?= lucide('archive') ?>
         <span><?= e($appName) ?> · 分享</span>
@@ -193,6 +194,9 @@ $crumbs = array_values(array_filter($crumbs ?? [], static fn (array $c): bool =>
                                 </li>
                             <?php endforeach; ?>
                         </ul>
+                        <?php if (!empty($listingMore)): ?>
+                            <p class="hint">仅显示前 500 项；完整内容可下载后查看。</p>
+                        <?php endif; ?>
                     <?php endif; ?>
                 <?php endif; ?>
 
@@ -238,6 +242,6 @@ $crumbs = array_values(array_filter($crumbs ?? [], static fn (array $c): bool =>
             <?= e($appName) ?> · 分享内容由上传者提供，请自行判断安全性
         </p>
     <?php endif; ?>
-</div>
+</main>
 
 <div class="toasts" data-toasts aria-live="polite"></div>

@@ -117,23 +117,130 @@ function node_children_rows(int $userId, int $parentId, array $opts = [], ?int $
 /** 回收站顶层条目（按删除时间倒序） */
 function node_trash_list(int $userId): array
 {
+    $where = 'n.user_id = ? AND n.deleted_at IS NOT NULL AND n.parent_id = ?';
+    if (!Auth::privateUnlocked()) {
+        $where .= ' AND n.is_private = 0';
+    }
+
     $rows = q_all(
-        'SELECT n.* FROM nodes n WHERE n.user_id = ? AND n.deleted_at IS NOT NULL AND n.parent_id = ?
-         ORDER BY n.deleted_at DESC, n.id DESC',
+        'SELECT n.* FROM nodes n WHERE ' . $where . ' ORDER BY n.deleted_at DESC, n.id DESC',
         [$userId, user_trash_id($userId)]
     );
     return node_attach_meta($userId, $rows);
 }
 
-/** 收藏列表 */
+/**
+ * 回收站一页。删除多了以后一次全查会把响应和 IN (...) 元信息查询一起撑爆，
+ * 与普通目录一样按删除时间倒序分页。
+ *
+ * @return array{0:list<array>,1:bool} [items, hasMore]
+ */
+function node_trash_page(int $userId, int $limit = 300, int $offset = 0): array
+{
+    $limit = max(1, min(1000, $limit));
+    $offset = max(0, $offset);
+
+    $where = 'n.user_id = ? AND n.deleted_at IS NOT NULL AND n.parent_id = ?';
+    if (!Auth::privateUnlocked()) {
+        $where .= ' AND n.is_private = 0';
+    }
+
+    $rows = q_all(
+        'SELECT n.* FROM nodes n WHERE ' . $where . '
+         ORDER BY n.deleted_at DESC, n.id DESC
+         LIMIT ' . ($limit + 1) . ' OFFSET ' . $offset,
+        [$userId, user_trash_id($userId)]
+    );
+
+    $hasMore = count($rows) > $limit;
+    if ($hasMore) {
+        array_pop($rows);
+    }
+    return [node_attach_meta($userId, $rows), $hasMore];
+}
+
+/** 回收站整体统计（页脚用，不能拿当前页加总） */
+function node_trash_stats(int $userId): array
+{
+    $private = Auth::privateUnlocked() ? '' : ' AND is_private = 0';
+    $row = q_one(
+        "SELECT
+            COALESCE(SUM(kind = 'folder'), 0) AS folders,
+            COALESCE(SUM(kind = 'file'), 0) AS files,
+            COALESCE(SUM(CASE WHEN kind = 'file' THEN size ELSE 0 END), 0) AS bytes
+         FROM nodes WHERE user_id = ? AND deleted_at IS NOT NULL AND parent_id = ?" . $private,
+        [$userId, user_trash_id($userId)]
+    );
+
+    return [
+        'folders' => (int) ($row['folders'] ?? 0),
+        'files'   => (int) ($row['files'] ?? 0),
+        'bytes'   => (int) ($row['bytes'] ?? 0),
+    ];
+}
+
+/** 收藏列表（兼容调用方，最多 500 条） */
 function node_favorites(int $userId): array
 {
+    $where = 'n.user_id = ? AND n.is_favorite = 1 AND n.deleted_at IS NULL';
+    if (!Auth::privateUnlocked()) {
+        $where .= ' AND n.is_private = 0';
+    }
+
     $rows = q_all(
-        'SELECT n.* FROM nodes n WHERE n.user_id = ? AND n.is_favorite = 1 AND n.deleted_at IS NULL
-         ORDER BY n.updated_at DESC LIMIT 500',
+        'SELECT n.* FROM nodes n WHERE ' . $where . ' ORDER BY n.updated_at DESC LIMIT 500',
         [$userId]
     );
     return node_attach_meta($userId, $rows);
+}
+
+/**
+ * 收藏一页。收藏同样可能很多，不应该被固定上限静默截断。
+ *
+ * @return array{0:list<array>,1:bool} [items, hasMore]
+ */
+function node_favorites_page(int $userId, int $limit = 300, int $offset = 0): array
+{
+    $limit = max(1, min(1000, $limit));
+    $offset = max(0, $offset);
+
+    $where = 'n.user_id = ? AND n.is_favorite = 1 AND n.deleted_at IS NULL';
+    if (!Auth::privateUnlocked()) {
+        $where .= ' AND n.is_private = 0';
+    }
+
+    $rows = q_all(
+        'SELECT n.* FROM nodes n WHERE ' . $where . '
+         ORDER BY n.updated_at DESC, n.id DESC
+         LIMIT ' . ($limit + 1) . ' OFFSET ' . $offset,
+        [$userId]
+    );
+
+    $hasMore = count($rows) > $limit;
+    if ($hasMore) {
+        array_pop($rows);
+    }
+    return [node_attach_meta($userId, $rows), $hasMore];
+}
+
+/** 收藏整体统计（页脚用） */
+function node_favorites_stats(int $userId): array
+{
+    $private = Auth::privateUnlocked() ? '' : ' AND is_private = 0';
+    $row = q_one(
+        "SELECT
+            COALESCE(SUM(kind = 'folder'), 0) AS folders,
+            COALESCE(SUM(kind = 'file'), 0) AS files,
+            COALESCE(SUM(CASE WHEN kind = 'file' THEN size ELSE 0 END), 0) AS bytes
+         FROM nodes WHERE user_id = ? AND is_favorite = 1 AND deleted_at IS NULL" . $private,
+        [$userId]
+    );
+
+    return [
+        'folders' => (int) ($row['folders'] ?? 0),
+        'files'   => (int) ($row['files'] ?? 0),
+        'bytes'   => (int) ($row['bytes'] ?? 0),
+    ];
 }
 
 /** 给一批节点补上标签、分享状态、缩略图标记、副本状态 */

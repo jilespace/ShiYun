@@ -25,6 +25,9 @@ $layoutUser = Auth::check() ? Auth::user() : null;
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="dark">
     <meta name="theme-color" content="#08090b">
+    <meta name="description" content="<?= e((string) config('app_name')) ?> — 自托管的个人网盘：上传、整理、预览、分享，文件始终留在自己的服务器。">
+    <?php /* 私网盘与公开分享链接都不应进搜索引擎索引 */ ?>
+    <meta name="robots" content="noindex, nofollow">
     <?php /* 站点图标用内联 SVG（品牌图形 archive）：不新增文件，
              也免去浏览器每次加载都去请求并不存在的 /favicon.ico。 */ ?>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a88ff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='20' height='5' x='2' y='3' rx='1'/%3E%3Cpath d='M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8'/%3E%3Cpath d='M10 12h4'/%3E%3C/svg%3E">
@@ -37,10 +40,11 @@ $layoutUser = Auth::check() ? Auth::user() : null;
     <?php endforeach; ?>
 </head>
 <body class="<?= e($bodyClass) ?>">
+    <a class="skip" href="#content">跳到主要内容</a>
     <canvas class="field" data-field aria-hidden="true"></canvas>
     <div class="grain" aria-hidden="true"></div>
     <div class="vignette" aria-hidden="true"></div>
-    <?= $content ?>
+    <div id="content" tabindex="-1"><?= $content ?></div>
     <script nonce="<?= e(csp_nonce()) ?>">
     <?php /* 内联 JSON 一律带 JSON_HEX_TAG：默认的 \/ 转义已经挡住了 </script>，
              但那是 json_encode 的默认行为，谁加个 JSON_UNESCAPED_SLASHES 就破了。

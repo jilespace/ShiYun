@@ -11,6 +11,7 @@ ini_set('error_log', BASE_PATH . '/runtime/php-error.log');
 
 $GLOBALS['config'] = require BASE_PATH . '/app/config.php';
 
+require BASE_PATH . '/app/autoload.php';
 require BASE_PATH . '/app/helpers.php';
 
 // 统一时区（PHP 侧；MySQL 会话时区在 db() 中按同一配置设置）
@@ -22,6 +23,9 @@ if (!headers_sent()) {
     header('X-Frame-Options: SAMEORIGIN');
     header('Referrer-Policy: same-origin');
     header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
+    header('Cross-Origin-Opener-Policy: same-origin');
+    header('X-Permitted-Cross-Domain-Policies: none');
+    header('X-Robots-Tag: noindex, nofollow');
     if (($_SERVER['HTTPS'] ?? '') === 'on') {
         header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
     }
@@ -48,6 +52,7 @@ require BASE_PATH . '/app/lib/shell.php';
 require BASE_PATH . '/app/lib/users.php';
 require BASE_PATH . '/app/lib/nav.php';
 require BASE_PATH . '/app/lib/nodes.php';
+// 兼容垫片：函数名保持不变，内部转调 Shiyun\Lib\Locations
 require BASE_PATH . '/app/lib/locations.php';
 require BASE_PATH . '/app/lib/storage.php';
 require BASE_PATH . '/app/lib/storage_drivers.php';
@@ -58,6 +63,7 @@ require BASE_PATH . '/app/lib/activity.php';
 require BASE_PATH . '/app/lib/ooxml.php';
 require BASE_PATH . '/app/lib/archive.php';
 require BASE_PATH . '/app/lib/search.php';
+// 兼容垫片：class_alias 到 Shiyun\Lib\QrCode
 require BASE_PATH . '/app/lib/qr.php';
 require BASE_PATH . '/app/lib/totp.php';
 require BASE_PATH . '/app/lib/shares.php';

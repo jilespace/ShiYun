@@ -95,6 +95,39 @@
 .tp__card .mfield { margin-bottom: 14px; }
 .tp__card .mbtn { width: 100%; }
 
+/* 房间规格：把创建卡剩余的高度变成可读信息，而不是一块空白 */
+.tp__specs {
+    display: flex;
+    gap: 8px;
+    margin: 18px 0 0;
+    padding: 14px 0 0;
+    border-top: 1px solid var(--line);
+    list-style: none;
+}
+
+.tp__specs li {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.tp__specs b {
+    font-family: var(--font-display);
+    font-size: 0.92rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    white-space: nowrap;
+}
+
+.tp__specs span {
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    color: var(--dim-2);
+}
+
 .tp__code-input {
     font-family: var(--font-mono);
     font-size: 1.4rem;

@@ -129,9 +129,20 @@ $data = json_decode($json, true)['data'] ?? [];
 check(count($data['children'] ?? []) === 300, '按 offset 续取第二页正常');
 check(($data['hasMore'] ?? null) === true, '续取响应带 hasMore');
 
+// 服务端是行/卡片标记的唯一来源，增量接口必须带回对应视图的片段
+$jsonGrid = $get($base . '/index.php?r=files.data&offset=0&limit=300&view=grid', $ssid);
+$dataGrid = json_decode($jsonGrid, true)['data'] ?? [];
+check(substr_count((string) ($dataGrid['html'] ?? ''), 'class="card"') === 300, '增量接口返回 300 个网格片段');
+check(($dataGrid['view'] ?? '') === 'grid', '增量接口回显请求的视图');
+$jsonList = $get($base . '/index.php?r=files.data&offset=0&limit=300&view=list', $ssid);
+$dataList = json_decode($jsonList, true)['data'] ?? [];
+check(substr_count((string) ($dataList['html'] ?? ''), 'class="row"') === 300, '增量接口返回 300 个列表片段');
+
 $jsonAll = $get($base . '/index.php?r=files.data', $ssid);
-check(count(json_decode($jsonAll, true)['data']['children'] ?? []) === PAGE_TEST_COUNT,
+$allData = json_decode($jsonAll, true)['data'] ?? [];
+check(count($allData['children'] ?? []) === PAGE_TEST_COUNT,
     '不传 offset 时仍返回全部（兼容页面上的常规刷新）');
+check(!array_key_exists('html', $allData), '未请求视图时不额外生成 HTML 片段');
 
 /* --------------------------------------------------------------- 收尾 */
 

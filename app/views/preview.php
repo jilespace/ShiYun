@@ -55,7 +55,7 @@ $backUrl = $parent !== null && $parent['kind'] === 'folder'
         </div>
     </header>
 
-    <div class="viewer__stage" data-stage>
+    <main class="viewer__stage" data-stage>
         <?php if ($mode === 'image'): ?>
             <div class="vimg" data-pan>
                 <img src="<?= e($rawUrl) ?>" alt="<?= e((string) $node['name']) ?>" data-image>
@@ -104,7 +104,7 @@ $backUrl = $parent !== null && $parent['kind'] === 'folder'
                 </a>
             </div>
         <?php endif; ?>
-    </div>
+    </main>
 
     <div class="viewer__rail" aria-hidden="true">
         <span><?= e(strtoupper((string) $node['ext'])) ?> · <?= e($kind) ?></span>

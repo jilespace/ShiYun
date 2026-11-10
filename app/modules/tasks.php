@@ -357,6 +357,7 @@ function tasks_cron(): void
         'swept'     => tasks_sweep_uploads(),
         'trash'     => tasks_sweep_trash(),
         'logs'      => tasks_sweep_logs(),
+        'sessions'  => tasks_sweep_sessions(),
     ]);
 }
 
@@ -386,6 +387,38 @@ function tasks_sweep_logs(): array
     );
 
     return ['activities' => $activities, 'logins' => $logins];
+}
+
+/**
+ * 清理过期的 PHP 会话文件。
+ *
+ * session.gc_probability 在部分 FPM 配置里是 0（交给系统 cron），
+ * 而本项目的会话目录是自定义的 runtime/sessions，系统的 session GC 管不到。
+ * 不清理的话，每次匿名访问都会留下一个 sess_* 文件，长期只增不减。
+ */
+function tasks_sweep_sessions(int $maxAgeDays = 30, int $limit = 500, ?string $dir = null): int
+{
+    $dir = $dir ?? (string) config('session_path');
+    if ($dir === '' || !is_dir($dir)) {
+        return 0;
+    }
+
+    $cutoff = time() - max(1, $maxAgeDays) * 86400;
+    $removed = 0;
+    foreach (glob($dir . '/sess_*') ?: [] as $file) {
+        if ($removed >= $limit) {
+            break;
+        }
+        if (!is_file($file)) {
+            continue;
+        }
+        $mtime = @filemtime($file);
+        if ($mtime !== false && $mtime < $cutoff && @unlink($file)) {
+            $removed++;
+        }
+    }
+
+    return $removed;
 }
 
 /**

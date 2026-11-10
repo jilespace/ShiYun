@@ -88,7 +88,7 @@
     letter-spacing: 0.01em;
     text-decoration: none;
     overflow: hidden;
-    transition: color 0.25s ease;
+    transition: color 0.25s ease, transform 0.12s ease;
 }
 
 .btn-solid::before {
@@ -106,6 +106,10 @@
 
 .btn-solid:hover {
     color: #fff;
+}
+
+.btn-solid:active {
+    transform: translateY(1px);
 }
 
 .btn-solid > * {
@@ -176,7 +180,8 @@
     color: var(--dim);
     font-size: 0.92rem;
     text-decoration: none;
-    transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+    transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease,
+        transform 0.12s ease;
 }
 
 .btn-line svg {
@@ -189,6 +194,10 @@
     color: var(--ink);
     border-color: rgba(244, 242, 236, 0.4);
     background: rgba(255, 255, 255, 0.03);
+}
+
+.btn-line:active {
+    transform: translateY(1px);
 }
 
 .btn-line:hover svg {

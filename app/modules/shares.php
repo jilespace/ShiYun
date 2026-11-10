@@ -14,11 +14,12 @@ function shares_list(): void
     $userId = Auth::id();
     $user = Auth::user();
 
+    $private = Auth::privateUnlocked() ? '' : ' AND n.is_private = 0';
     $rows = q_all(
         'SELECT s.*, n.name AS node_name, n.kind AS node_kind, n.size AS node_size,
-                n.ext AS node_ext, n.mime AS node_mime, n.child_count
+                n.ext AS node_ext, n.mime AS node_mime, n.child_count, n.is_private
          FROM shares s JOIN nodes n ON n.id = s.node_id
-         WHERE s.user_id = ?
+         WHERE s.user_id = ?' . $private . '
          ORDER BY s.id DESC LIMIT 300',
         [$userId]
     );
@@ -39,7 +40,7 @@ function shares_list(): void
             'is_favorite' => 0,
             'is_hidden'   => 0,
             'is_locked'   => 0,
-            'is_private'  => 0,
+            'is_private'  => (int) $row['is_private'],
             'color'       => null,
             'note'        => null,
             'child_count' => (int) $row['child_count'],
@@ -50,11 +51,12 @@ function shares_list(): void
         $items[] = $share;
     }
 
+    $privateDirect = Auth::privateUnlocked() ? '' : ' AND n.is_private = 0';
     $directRows = q_all(
         'SELECT d.*, n.name AS node_name, n.kind AS node_kind, n.size AS node_size,
-                n.ext AS node_ext, n.mime AS node_mime, n.deleted_at AS node_deleted_at
+                n.ext AS node_ext, n.mime AS node_mime, n.deleted_at AS node_deleted_at, n.is_private
          FROM direct_links d JOIN nodes n ON n.id = d.node_id
-         WHERE d.user_id = ?
+         WHERE d.user_id = ?' . $privateDirect . '
          ORDER BY d.id DESC LIMIT 300',
         [$userId]
     );
@@ -75,7 +77,7 @@ function shares_list(): void
             'is_favorite' => 0,
             'is_hidden' => 0,
             'is_locked' => 0,
-            'is_private' => 0,
+            'is_private' => (int) $row['is_private'],
             'color' => null,
             'note' => null,
             'child_count' => 0,
@@ -110,6 +112,9 @@ function shares_create(): void
     $node = node_require($userId, input_int('id'));
     if ($node['deleted_at'] !== null) {
         json_fail('该条目已在回收站中。');
+    }
+    if (node_in_private($userId, $node)) {
+        json_fail('私密空间的内容不能分享。', 403, 'private');
     }
 
     $permission = (string) input('permission', 'download');
@@ -292,6 +297,19 @@ function shares_resolve(bool $allowFullInbox = false): array
         ]);
     }
 
+    // 分享建立后文件才被移进私密空间：所有入口（浏览/下载/上传）一律失效
+    if (node_in_private((int) $share['user_id'], $node)) {
+        if (wants_json()) {
+            json_fail('分享不存在或已失效', 410, 'gone');
+        }
+        http_response_code(410);
+        share_page([
+            'title'  => '分享不存在或已失效',
+            'state'  => 'gone',
+            'token'  => $token,
+        ]);
+    }
+
     return [$share, $node];
 }
 
@@ -300,6 +318,7 @@ function share_render(array $share, array $node, string $state, array $extra = [
     $owner = find_user_by_id((int) $share['user_id']);
 
     $listing = [];
+    $listingMore = false;
     $crumbs = [];
     $currentId = (int) $node['id'];
 
@@ -312,9 +331,11 @@ function share_render(array $share, array $node, string $state, array $extra = [
             $target = $node;
         }
         $currentId = (int) $target['id'];
-        $listing = array_map('node_public', node_children((int) $share['user_id'], $currentId, [
+        // 公开页也限制单页条目数；超大目录完整列表交给下载
+        [$rows, $listingMore] = node_children_page((int) $share['user_id'], $currentId, [
             'sort' => 'name', 'dir' => 'asc', 'showHidden' => false,
-        ]));
+        ], 500, 0);
+        $listing = array_map('node_public', $rows);
         $crumbs = array_slice(node_breadcrumb((int) $share['user_id'], $currentId), 0);
     }
 
@@ -326,6 +347,7 @@ function share_render(array $share, array $node, string $state, array $extra = [
         'node'     => node_public($node),
         'owner'    => $owner !== null ? (string) $owner['display_name'] : '某位用户',
         'listing'  => $listing,
+        'listingMore' => $listingMore,
         'crumbs'   => $crumbs,
         'current'  => $currentId,
         'rootId'   => (int) $node['id'],
@@ -405,13 +427,16 @@ function shares_browse(): void
         json_fail('目录不在分享范围内。', 403);
     }
 
+    [$rows, $hasMore] = node_children_page((int) $share['user_id'], $folderId, [
+        'sort' => 'name', 'dir' => 'asc', 'showHidden' => false,
+    ], 500, 0);
+
     json_ok([
         'crumbs'   => node_breadcrumb((int) $share['user_id'], $folderId),
         'rootId'   => (int) $node['id'],
         'folder'   => node_public($target),
-        'children' => array_map('node_public', node_children((int) $share['user_id'], $folderId, [
-            'sort' => 'name', 'dir' => 'asc', 'showHidden' => false,
-        ])),
+        'children' => array_map('node_public', $rows),
+        'hasMore'  => $hasMore,
     ]);
 }
 

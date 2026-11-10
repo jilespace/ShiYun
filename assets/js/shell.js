@@ -150,6 +150,7 @@
         modalBody.innerHTML = bodyHtml;
         modalFoot.innerHTML = footHtml || '';
         modal.hidden = false;
+        document.body.classList.add('is-modal-open');
         onClose = closeFn || null;
 
         // 优先聚焦主操作按钮，其次首个可聚焦元素（含底部按钮）
@@ -164,6 +165,7 @@
     function closeModal() {
         if (!modal) return;
         modal.hidden = true;
+        document.body.classList.remove('is-modal-open');
         modalBody.innerHTML = '';
         modalFoot.innerHTML = '';
         const fn = onClose;
@@ -287,11 +289,21 @@
     const burger = $('[data-burger]');
 
     if (app && burger) {
-        burger.addEventListener('click', () => app.classList.toggle('is-nav-open'));
+        burger.addEventListener('click', () => {
+            const open = app.classList.toggle('is-nav-open');
+            burger.setAttribute('aria-expanded', String(open));
+            burger.setAttribute('aria-label', open ? '收起导航' : '展开导航');
+            // 窄屏侧栏是覆盖层；打开后把焦点交给第一个导航项，键盘用户不用倒着 Tab
+            if (open) {
+                $('.spine__item')?.focus();
+            }
+        });
         document.addEventListener('click', (e) => {
             if (!app.classList.contains('is-nav-open')) return;
             if (e.target.closest('.spine') || e.target.closest('[data-burger]')) return;
             app.classList.remove('is-nav-open');
+            burger.setAttribute('aria-expanded', 'false');
+            burger.setAttribute('aria-label', '展开导航');
         });
     }
 
@@ -336,6 +348,21 @@
         }
         if (e.key === 'Escape' && modal && !modal.hidden) {
             closeModal();
+            e.stopImmediatePropagation();
+            return;
+        }
+        if (e.key === 'Escape' && whoMenu && !whoMenu.hidden) {
+            closeWho();
+            whoBtn?.focus();
+            e.stopImmediatePropagation();
+            return;
+        }
+        if (e.key === 'Escape' && app?.classList.contains('is-nav-open')) {
+            app.classList.remove('is-nav-open');
+            burger?.setAttribute('aria-expanded', 'false');
+            burger?.setAttribute('aria-label', '展开导航');
+            burger?.focus();
+            e.stopImmediatePropagation();
         }
     });
 

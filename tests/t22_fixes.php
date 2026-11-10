@@ -233,8 +233,70 @@ $sharesSrc = (string) file_get_contents(BASE_PATH . '/app/modules/shares.php');
 check(!str_contains($sharesSrc, 'node_public($row +'), 'shares_list 不再用 $row + [...]（node.id 不会被分享 id 顶掉）');
 check(str_contains($sharesSrc, "input_int('id')"), 'shares_download 认得 id 参数（下载文件夹内的单个文件）');
 
+/* --------------------------------------------- 私密内容不可创建分享/直链 */
+
+echo "\n· 私密内容分享边界\n";
+$privateNode = node_create_file($uid, $privateRoot, 'private-share.txt', $makeBlob('t22-private'), 'text/plain');
+
+$ssid = 't22priv' . bin2hex(random_bytes(6));
+session_write_close();
+ini_set('session.use_strict_mode', '0');
+session_id($ssid);
+session_start();
+$_SESSION['user_id'] = $uid;
+$_SESSION['auth_epoch'] = (int) q_val('SELECT session_epoch FROM users WHERE id = ?', [$uid]);
+$csrf = csrf_token();
+session_write_close();
+
+$base = 'http://127.0.0.1:' . (getenv('TEST_HTTP_PORT') ?: '15244');
+$post = static function (string $route, array $payload) use ($base, $ssid, $csrf): array {
+    $ctx = stream_context_create(['http' => [
+        'method'  => 'POST',
+        'header'  => "Content-Type: application/json\r\n"
+            . "X-CSRF-Token: {$csrf}\r\n"
+            . "X-Requested-With: XMLHttpRequest\r\n"
+            . "Cookie: shiyun_sid={$ssid}\r\n",
+        'content' => json_encode($payload),
+        'ignore_errors' => true,
+        'timeout' => 15,
+    ]]);
+    return (array) (json_decode((string) @file_get_contents($base . '/index.php?r=' . $route, false, $ctx), true) ?? []);
+};
+
+$shareRes = $post('shares.create', ['id' => (int) $privateNode['id'], 'permission' => 'download']);
+check(($shareRes['ok'] ?? true) === false && ($shareRes['code'] ?? '') === 'private',
+    '私密空间文件创建分享被拒绝');
+
+$directRes = $post('direct.create', ['id' => (int) $privateNode['id']]);
+check(($directRes['ok'] ?? true) === false && ($directRes['code'] ?? '') === 'private',
+    '私密空间文件创建直链被拒绝');
+
+// 分享建立之后才被移入私密空间：必须整体失效，而不是继续可浏览/下载
+$shareNode = node_create_file($uid, $root, 'share-then-private.txt', $makeBlob('t22-share-then-private'), 'text/plain');
+$madeShare = $post('shares.create', ['id' => (int) $shareNode['id'], 'permission' => 'download']);
+$shareToken = (string) ($madeShare['data']['share']['token'] ?? '');
+check($shareToken !== '', '普通文件可以创建分享');
+
+$statusOf = static function (string $url): int {
+    $ctx = stream_context_create(['http' => ['method' => 'GET', 'ignore_errors' => true, 'timeout' => 15]]);
+    @file_get_contents($url, false, $ctx);
+    $line = (string) ($http_response_header[0] ?? '');
+    return preg_match('#\s(\d{3})\s#', $line, $m) === 1 ? (int) $m[1] : 0;
+};
+$shareUrl = $base . '/index.php?r=shares.open&t=' . rawurlencode($shareToken);
+check($statusOf($shareUrl) === 200, '分享创建后可以访问');
+
+node_move($uid, node_require($uid, (int) $shareNode['id']), $privateRoot);
+check($statusOf($shareUrl) === 410, '文件移入私密空间后分享链接失效');
+check($statusOf($base . '/index.php?r=shares.download&t=' . rawurlencode($shareToken)
+    . '&id=' . (int) $shareNode['id']) === 410, '文件移入私密空间后分享下载也失效');
+
+@unlink((string) config('session_path') . '/sess_' . $ssid);
+
 /* ------------------------------------------------------------ 收尾 */
 
+q_exec('DELETE FROM share_visits WHERE share_id IN (SELECT id FROM shares WHERE user_id = ?)', [$uid]);
+q_exec('DELETE FROM shares WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM nodes WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM blobs WHERE ref_count <= 0', []);
 q_exec('DELETE FROM users WHERE id = ?', [$uid]);

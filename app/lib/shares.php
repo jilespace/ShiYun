@@ -136,12 +136,12 @@ function share_visits_of(int $shareId, int $limit = 100): array
 /**
  * 渲染二维码 SVG。
  * 本机 php.ini 禁用了所有进程执行函数，系统里的 qrencode 用不上，
- * 所以直接用内置的纯 PHP 编码器（见 app/lib/qr.php）。
+ * 所以直接用内置的纯 PHP 编码器（见 app/lib/QrCode.php）。
  */
 function qr_svg(string $text, int $scale = 6, int $margin = 2): ?string
 {
     try {
-        return (new QrCode($text))->svg(max(1, min(20, $scale)), max(0, min(10, $margin)));
+        return (new \Shiyun\Lib\QrCode($text))->svg(max(1, min(20, $scale)), max(0, min(10, $margin)));
     } catch (Throwable $e) {
         return null;
     }

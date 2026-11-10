@@ -15,7 +15,8 @@ $barTools = $barTools ?? '';
 $query = $query ?? '';
 ?>
 <header class="bar">
-    <button class="iconbtn bar__burger" type="button" data-burger aria-label="展开导航">
+    <button class="iconbtn bar__burger" type="button" data-burger aria-label="展开导航"
+            aria-controls="app-nav" aria-expanded="false">
         <?= lucide('panel-left') ?>
     </button>
 
@@ -23,7 +24,7 @@ $query = $query ?? '';
         <input type="hidden" name="r" value="search.results">
         <?= lucide('search', 'omni__ico') ?>
         <input class="omni__in" name="q" type="search" placeholder="搜索文件名，或输入内容关键词"
-               autocomplete="off" value="<?= e($query) ?>">
+               aria-label="搜索文件和内容" autocomplete="off" value="<?= e($query) ?>">
         <kbd class="omni__kbd">/</kbd>
     </form>
 
@@ -33,7 +34,7 @@ $query = $query ?? '';
         <button class="iconbtn" type="button" data-task-toggle aria-label="传输队列" title="传输队列">
             <?= lucide('arrow-up-down') ?><span class="dot" data-task-dot hidden></span>
         </button>
-        <a class="iconbtn" href="<?= e(url('settings.show')) ?>" aria-label="设置"><?= lucide('settings') ?></a>
+        <a class="iconbtn bar__settings" href="<?= e(url('settings.show')) ?>" aria-label="设置" title="设置"><?= lucide('settings') ?></a>
 
         <div class="who" data-who>
             <button class="who__btn" type="button" data-who-btn aria-haspopup="menu" aria-expanded="false" aria-label="账户菜单">

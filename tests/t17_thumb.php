@@ -162,6 +162,18 @@ check(($s2['right'] ?? false) === true && ($s2['left'] ?? true) === false, 'Orie
 check(str_contains(thumb_path(str_repeat('a', 64)), '-r' . THUMB_REVISION . '.jpg'),
     '缩略图缓存键带版本号——改生成逻辑后旧缓存不会被误用');
 
+/* ------------------------------------------------ 删除内容时清理缩略图 */
+
+$orphanHash = hash('sha256', random_bytes(16));
+$orphanSource = $write(jpeg_with_orientation(1));
+$orphanThumb = make_thumbnail($orphanSource, $orphanHash);
+$thumbFiles[] = (string) $orphanThumb;
+$orphanBlob = blob_acquire($orphanHash, (int) filesize($orphanSource), 'image/jpeg');
+check($orphanThumb !== null && is_file($orphanThumb), '待删除内容的缩略图已生成');
+blob_release($orphanBlob);
+check(!is_file((string) $orphanThumb), '内容引用归零后缩略图一并删除');
+q_exec('DELETE FROM blobs WHERE id = ?', [$orphanBlob]);
+
 /* ------------------------------------------------- 解码内存闸门
 
    GD 解码会一次铺开整张真彩位图。128M 的默认上限连 48MP 手机照片都放不下，

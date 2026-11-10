@@ -29,7 +29,7 @@ $initial = (string) json_encode($config, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG |
                 </div>
                 <div class="pagehead__acts">
                     <select class="select" data-account-select aria-label="对象存储账号"></select>
-                    <button class="ghost" type="button" data-account-new>
+                    <button class="ghost" type="button" data-account-new data-account-new-head>
                         <?= lucide('plus', 'ghost__ico') ?><span>添加账号</span>
                     </button>
                     <button class="ghost" type="button" data-account-edit>
@@ -77,16 +77,18 @@ $initial = (string) json_encode($config, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG |
                     <div class="objdetail__acts" data-detail-acts></div>
                 </div>
 
-                <div class="seg2" data-detail-tabs>
-                    <a href="#" class="is-on" data-tab="objects">对象</a>
-                    <a href="#" data-tab="settings">设置</a>
+                <div class="seg2" data-detail-tabs role="tablist" aria-label="对象存储视图">
+                    <a href="#" class="is-on" data-tab="objects" role="tab" aria-selected="true"
+                       aria-controls="obj-panel-objects">对象</a>
+                    <a href="#" data-tab="settings" role="tab" aria-selected="false"
+                       aria-controls="obj-panel-settings">设置</a>
                 </div>
 
-                <div data-tab-panel="objects">
+                <div data-tab-panel="objects" id="obj-panel-objects" role="tabpanel">
                     <div class="objbar">
                         <div class="objcrumb" data-crumb></div>
                         <div class="objbar__tools">
-                            <input class="minput" type="search" data-obj-search placeholder="按前缀搜索当前目录">
+                            <input class="minput" type="search" data-obj-search aria-label="按前缀搜索当前目录" placeholder="按前缀搜索当前目录">
                             <select class="select" data-upload-class aria-label="上传存储类型">
                                 <option value="">默认存储类型</option>
                                 <?php foreach ($config['classes'] as $key => $label): ?>
@@ -118,7 +120,7 @@ $initial = (string) json_encode($config, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG |
                     </div>
                 </div>
 
-                <div data-tab-panel="settings" hidden>
+                <div data-tab-panel="settings" id="obj-panel-settings" role="tabpanel" hidden>
                     <div class="objsettings" data-settings-host></div>
                 </div>
             </section>

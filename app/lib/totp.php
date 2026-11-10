@@ -152,7 +152,7 @@ function totp_qr_svg(string $b32Secret, string $account, string $issuer, int $sc
 
     foreach ($candidates as $label) {
         try {
-            return (new QrCode(totp_uri($b32Secret, $label, $issuer)))->svg($scale, $margin);
+            return (new \Shiyun\Lib\QrCode(totp_uri($b32Secret, $label, $issuer)))->svg($scale, $margin);
         } catch (RuntimeException $e) {
             // 内容仍超容量：换更短的账号标签再试
         }

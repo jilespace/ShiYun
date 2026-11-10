@@ -28,5 +28,10 @@ function app_nav(): array
 /** 当前用户是否设置了私密空间密码 */
 function private_space_ready(int $userId): bool
 {
+    // 侧栏每个页面都会问一次；当前登录用户的行已经由 Auth 缓存过了
+    $user = Auth::user();
+    if ($user !== null && (int) $user['id'] === $userId) {
+        return ($user['private_hash'] ?? null) !== null;
+    }
     return q_val('SELECT private_hash FROM users WHERE id = ?', [$userId]) !== null;
 }

@@ -42,13 +42,7 @@
     const escapeHtml = SY.escapeHtml;
     const humanSize = SY.humanSize;
 
-    /* COS 副本状态：图标名必须已存在于 assets/js/icons.js */
-    const COS_STATE = {
-        ok: ['check-circle', 'COS 已同步'],
-        pending: ['refresh-cw', 'COS 推送中'],
-        failed: ['circle-alert', 'COS 推送失败'],
-        stale: ['alert-triangle', 'COS 副本失效'],
-    };
+    /* COS 副本状态文案（信息对话框用；列表徽标已由服务端 NodeView 统一渲染） */
     const COS_LABEL = { ok: '已同步', pending: '推送中', failed: '推送失败', stale: '副本失效' };
 
     /* ══════════════════════════════════════════════════════════ 渲染 */
@@ -58,6 +52,7 @@
     const voidHost = $('[data-void]');
     const listHead = $('[data-listhead]');
     const listFootEl = $('[data-listfoot]');
+    const listWrap = $('[data-listwrap]');
 
     const pageSize = () => Number(app.dataset.pageSize) || 300;
 
@@ -108,15 +103,19 @@
         observeMore(sentinel);
     }
 
-    /** 追加一页：不清空已选、不重建整个列表 */
-    function appendList(nodes) {
+    const activeHost = () => state.view === 'grid' ? cardsHost : rowsHost;
+    const idleHost = () => state.view === 'grid' ? rowsHost : cardsHost;
+
+    /** 追加一页：不清空已选、不重建整个列表；未显示的视图留空，切换时再取 */
+    function appendList(nodes, html) {
         if (!nodes || !nodes.length) return;
 
-        const base = rowsHost.children.length;
+        const host = activeHost();
+        const base = host.children.length;
         nodes.forEach((n) => state.nodes.set(n.id, n));
 
-        rowsHost.insertAdjacentHTML('beforeend', nodes.map((n, i) => rowHtml(n, i + base)).join(''));
-        cardsHost.insertAdjacentHTML('beforeend', nodes.map((n, i) => cardHtml(n, i + base)).join(''));
+        if (html) host.insertAdjacentHTML('beforeend', html);
+        idleHost().innerHTML = '';
 
         voidHost.hidden = true;
         listHead.style.display = '';
@@ -132,6 +131,8 @@
 
         loadingMore = true;
         sentinel.classList.add('is-loading');
+        // 若期间换了目录/排序，这一页属于旧数据集，不能再往新列表里追加
+        const token = [state.folder, state.section, state.sort, state.dir].join('|');
 
         try {
             const data = await api('files.data', {
@@ -142,10 +143,14 @@
                 type: 'all',
                 offset: Number(sentinel.dataset.next) || 0,
                 limit: pageSize(),
+                view: state.view,
             }, { method: 'GET' });
 
-            appendList(data.children || []);
-            syncMore(!!data.hasMore, rowsHost.children.length);
+            if (token !== [state.folder, state.section, state.sort, state.dir].join('|')) {
+                return;
+            }
+            appendList(data.children || [], data.html || '');
+            syncMore(!!data.hasMore, activeHost().children.length);
         } catch (err) {
             const hint = sentinel.querySelector('.listmore__hint');
             if (hint) hint.textContent = err.message + ' · 上滑重试';
@@ -155,75 +160,52 @@
         }
     }
 
-    function nodeHref(n) {
-        return n.kind === 'folder'
-            ? CFG.base + '?r=files.list&folder=' + n.id
-            : CFG.base + '?r=preview.open&id=' + n.id;
+    let viewSeq = 0;
+
+    /**
+     * 切换视图时向服务端要另一套片段。
+     * 首屏只渲染当前视图，切换时按已加载数量分块取，避免一次 limit 过大；
+     * 行/卡片的标记只在 NodeView 里维护，前端不再拼 HTML。
+     */
+    async function buildView(view) {
+        const seq = ++viewSeq;
+        const total = Math.max(1, state.nodes.size);
+        let html = '';
+
+        for (let offset = 0; offset < total; offset += pageSize()) {
+            const payload = {
+                sort: state.sort,
+                dir: state.dir,
+                type: 'all',
+                offset: offset,
+                limit: Math.min(pageSize(), total - offset),
+                view: view,
+            };
+            if (state.section === 'files') {
+                payload.folder = state.folder;
+            } else {
+                payload.section = state.section;
+            }
+
+            const data = await api('files.data', payload, { method: 'GET' });
+            if (seq !== viewSeq) return;
+            html += data.html || '';
+        }
+
+        const host = view === 'grid' ? cardsHost : rowsHost;
+        const other = view === 'grid' ? rowsHost : cardsHost;
+        host.innerHTML = html;
+        other.innerHTML = '';
+        syncBulk();
     }
 
-    function badges(n) {
-        let out = '';
-        if (n.locked) out += '<span class="badge" title="已锁定">' + icon('lock', 'badge__ico') + '</span>';
-        if (n.hidden) out += '<span class="badge" title="已隐藏">' + icon('eye-off', 'badge__ico') + '</span>';
-        if (n.favorite) out += '<span class="badge badge--star" title="已收藏">' + icon('star', 'badge__ico') + '</span>';
-        if (n.shareCount > 0) out += '<span class="badge" title="已分享">' + icon('link-2', 'badge__ico') + '</span>';
-        if (n.directCount > 0) out += '<span class="badge" title="有直链">' + icon('zap', 'badge__ico') + '</span>';
-        if (n.memberCount > 0) out += '<span class="badge" title="协作中">' + icon('users', 'badge__ico') + '</span>';
-        const cos = COS_STATE[n.cosStatus];
-        if (cos) out += '<span class="badge badge--cos badge--cos-' + escapeHtml(n.cosStatus) + '" title="' + cos[1] + '">' + icon(cos[0], 'badge__ico') + '</span>';
-        return out;
-    }
-
-    function tagChips(n) {
-        return (n.tags || []).slice(0, 3).map((t) =>
-            '<span class="chip" style="--chip:' + escapeHtml(t.color) + '">' + escapeHtml(t.name) + '</span>'
-        ).join('');
-    }
-
-    function rowHtml(n, i) {
-        const isFolder = n.kind === 'folder';
-        const colorDot = n.color
-            ? '<span class="row__color" style="--dot:' + escapeHtml(n.color) + '"></span>' : '';
-        return '<li class="row" data-id="' + n.id + '" data-kind="' + n.kind + '" data-type="' + escapeHtml(n.type)
-            + '" data-name="' + escapeHtml(n.name) + '" style="--i:' + i + '">'
-            + '<span class="row__pick"><input type="checkbox" class="pick" aria-label="选择 ' + escapeHtml(n.name) + '"></span>'
-            + '<span class="row__main">'
-            + '<span class="row__icon row__icon--' + escapeHtml(n.type) + '">' + icon(n.icon) + '</span>'
-            + '<a class="row__name" href="' + nodeHref(n) + '" data-name-link>' + escapeHtml(n.name) + '</a>'
-            + colorDot + badges(n) + tagChips(n)
-            + '</span>'
-            + '<span class="row__size">' + (isFolder ? n.childCount + ' 项' : escapeHtml(n.sizeText)) + '</span>'
-            + '<span class="row__time">' + escapeHtml(n.updatedText) + '</span>'
-            + '<span class="row__act"><button class="iconbtn" type="button" data-menu aria-label="更多操作">'
-            + icon('more-horizontal') + '</button></span>'
-            + '</li>';
-    }
-
-    function cardHtml(n, i) {
-        const isFolder = n.kind === 'folder';
-        const art = n.hasThumb
-            ? '<img src="' + CFG.base + '?r=preview.thumb&id=' + n.id + '" alt="" loading="lazy" decoding="async">'
-            : icon(n.icon, 'card__glyph');
-        return '<li class="card" data-id="' + n.id + '" data-kind="' + n.kind + '" data-type="' + escapeHtml(n.type)
-            + '" data-name="' + escapeHtml(n.name) + '" style="--i:' + i + '">'
-            + '<span class="card__pick"><input type="checkbox" class="pick" aria-label="选择 ' + escapeHtml(n.name) + '"></span>'
-            + '<a class="card__body" href="' + nodeHref(n) + '" data-name-link>'
-            + '<span class="card__art card__art--' + escapeHtml(n.type) + '">' + art + '</span>'
-            + '<span class="card__name">' + escapeHtml(n.name) + '</span>'
-            + '<span class="card__meta">' + (isFolder ? n.childCount + ' 项' : escapeHtml(n.sizeText))
-            + ' · ' + escapeHtml(n.updatedText) + '</span>'
-            + '</a>'
-            + '<button class="iconbtn card__menu" type="button" data-menu aria-label="更多操作">'
-            + icon('more-horizontal') + '</button>'
-            + '</li>';
-    }
-
-    function renderList(nodes) {
+    function renderList(nodes, html) {
         state.nodes.clear();
         nodes.forEach((n) => state.nodes.set(n.id, n));
 
-        rowsHost.innerHTML = nodes.map(rowHtml).join('');
-        cardsHost.innerHTML = nodes.map(cardHtml).join('');
+        const grid = state.view === 'grid';
+        (grid ? cardsHost : rowsHost).innerHTML = html || '';
+        (grid ? rowsHost : cardsHost).innerHTML = '';
 
         const empty = nodes.length === 0;
         voidHost.hidden = !empty;
@@ -246,8 +228,6 @@
         syncBulk();
     }
 
-    SY.renderList = renderList;
-
     /* ══════════════════════════════════════════════════════════ 选择 */
 
     const bulk = $('[data-bulk]');
@@ -265,6 +245,8 @@
         const all = $('[data-pick-all]');
         if (all) {
             all.checked = state.picked.size > 0 && state.picked.size === state.nodes.size;
+            // 部分选中显示为半选，避免看成一个都没选
+            all.indeterminate = state.picked.size > 0 && state.picked.size < state.nodes.size;
         }
     }
 
@@ -308,8 +290,12 @@
     async function loadFolder(folderId, push) {
         // 用请求序号代替 busy 丢弃：并发导航/排序时保留最后一次，过期结果直接作废
         const seq = ++loadSeq;
+        // 目录变了，任何在途的「切视图取片段」都必须作废，否则会用旧目录的 HTML 覆盖新列表
+        viewSeq++;
         state.busy = true;
         listHead.style.opacity = '0.4';
+        app.classList.add('is-loading');
+        app.setAttribute('aria-busy', 'true');
 
         try {
             // offset: 0 走分页分支：大目录只渲染首页，其余交给哨兵续取
@@ -321,13 +307,18 @@
                 type: 'all',
                 offset: 0,
                 limit: pageSize(),
+                view: state.view,
             }, { method: 'GET' });
 
             if (seq !== loadSeq) return;   // 已有更新的请求，本次结果作废
 
             state.folder = folderId;
             app.dataset.folder = String(folderId);
-            renderList(data.children);
+            renderList(data.children, data.html);
+            // 换目录/排序后回到顶部：否则从长列表深处点进子目录会停在半空
+            if (listWrap) {
+                listWrap.scrollTop = 0;
+            }
             syncMore(!!data.hasMore, data.children.length);
 
             // 收藏与回收站没有层级，路径栏保持静态
@@ -347,11 +338,11 @@
             if (seq === loadSeq) {
                 state.busy = false;
                 listHead.style.opacity = '';
+                app.classList.remove('is-loading');
+                app.removeAttribute('aria-busy');
             }
         }
     }
-
-    SY.loadFolder = loadFolder;
 
     function renderCrumbs(crumbs) {
         const host = $('[data-crumbs]');
@@ -359,10 +350,11 @@
             const last = i === crumbs.length - 1;
             const sep = i > 0 ? icon('chevron-right', 'crumbs__sep') : '';
             if (last) {
-                return sep + '<span class="crumbs__here" aria-current="page">' + escapeHtml(c.name) + '</span>';
+                return sep + '<span class="crumbs__here" aria-current="page" title="' + escapeHtml(c.name) + '">'
+                    + escapeHtml(c.name) + '</span>';
             }
-            return sep + '<a class="crumbs__link" href="' + CFG.base + '?r=files.list&folder=' + c.id + '">'
-                + escapeHtml(c.name) + '</a>';
+            return sep + '<a class="crumbs__link" href="' + CFG.base + '?r=files.list&folder=' + c.id + '"'
+                + ' title="' + escapeHtml(c.name) + '">' + escapeHtml(c.name) + '</a>';
         }).join('');
     }
 
@@ -371,18 +363,29 @@
     $$('[data-view-set]').forEach((btn) => {
         btn.addEventListener('click', async () => {
             const view = btn.dataset.viewSet;
-            if (view === state.view) return;
+            // 目录正在加载时先别切视图，避免两套片段互相覆盖
+            if (view === state.view || state.busy) return;
             state.view = view;
             app.dataset.view = view;
             $$('[data-view-set]').forEach((b) => {
-                const on = b === btn;
+                const on = b.dataset.viewSet === view;
                 b.classList.toggle('is-on', on);
                 b.setAttribute('aria-pressed', on ? 'true' : 'false');
             });
+
+            app.classList.add('is-loading');
+            app.setAttribute('aria-busy', 'true');
             try {
-                await api('files.view', { view: view });
+                // 另一个视图首屏没有渲染：向服务端取片段，前端不再拼 HTML
+                await Promise.all([
+                    buildView(view),
+                    api('files.view', { view: view }),
+                ]);
             } catch (err) {
                 toast(err.message, 'err');
+            } finally {
+                app.classList.remove('is-loading');
+                app.removeAttribute('aria-busy');
             }
         });
     });
@@ -1002,7 +1005,7 @@
 
         ctx.innerHTML = items.map((it) => {
             if (it[0] === '-') return '<hr>';
-            return '<button type="button" data-ctx-act="' + it[0] + '"'
+            return '<button type="button" role="menuitem" data-ctx-act="' + it[0] + '"'
                 + (it[3] ? ' class="is-danger"' : '') + '>' + icon(it[1]) + '<span>' + it[2] + '</span></button>';
         }).join('');
 
@@ -1414,10 +1417,22 @@
             const modalEl = $('[data-modal]');
             if (modalEl && !modalEl.hidden) { closeModal(); return; }
             if (!ctx.hidden) { closeCtx(); return; }
+            if (sortMenu && !sortMenu.hidden) {
+                closeSortMenu();
+                sortBtn?.focus();
+                return;
+            }
             if (state.picked.size) { state.picked.clear(); syncBulk(); }
             return;
         }
         if (typing) return;
+
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+            e.preventDefault();
+            state.nodes.forEach((n) => state.picked.add(n.id));
+            syncBulk();
+            return;
+        }
 
         if ((e.key === 'Delete' || e.key === 'Backspace') && state.picked.size) {
             e.preventDefault();

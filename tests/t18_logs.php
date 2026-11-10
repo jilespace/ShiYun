@@ -58,6 +58,22 @@ $cronSrc = (string) file_get_contents(BASE_PATH . '/app/modules/tasks.php');
 check(str_contains($cronSrc, 'tasks_sweep_logs()'), '计划任务里调用了日志清理');
 check(str_contains($cronSrc, "'logs'      => tasks_sweep_logs()"), '清理结果出现在 cron 的返回里');
 
+// 过期会话文件清理：自定义 session_path 不吃系统 GC
+$tmpSessions = sys_get_temp_dir() . '/shiyun-sess-' . bin2hex(random_bytes(4));
+mkdir($tmpSessions, 0700, true);
+$oldSession = $tmpSessions . '/sess_old_test';
+$freshSession = $tmpSessions . '/sess_fresh_test';
+file_put_contents($oldSession, 'old');
+file_put_contents($freshSession, 'fresh');
+touch($oldSession, time() - 40 * 86400);
+$sweptSessions = tasks_sweep_sessions(30, 500, $tmpSessions);
+check($sweptSessions >= 1, '过期会话文件被清理（实际 ' . $sweptSessions . '）');
+check(!is_file($oldSession), '超过保留期的会话文件已删除');
+check(is_file($freshSession), '活跃会话文件没有被误删');
+@unlink($freshSession);
+@rmdir($tmpSessions);
+check(str_contains($cronSrc, 'tasks_sweep_sessions()'), '计划任务里调用了会话清理');
+
 q_exec('DELETE FROM activities WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM login_logs WHERE user_id = ?', [$uid]);
 q_exec('DELETE FROM users WHERE id = ?', [$uid]);

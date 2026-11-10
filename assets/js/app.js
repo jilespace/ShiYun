@@ -59,6 +59,10 @@
             return;
         }
 
+        // 工作台是密集数据页，背景图只是极低透明度的纹理；持续 60fps 重绘
+        // 会白白占用 CPU/GPU。这类页面只画一帧静态图案，resize 时再补一帧。
+        const animate = !document.body.classList.contains('is-app');
+
         const paths = {};
         for (const key in SHAPES) {
             paths[key] = buildPath(SHAPES[key]);
@@ -69,7 +73,7 @@
         let height = 0;
         let particles = [];
         let target = null;
-        let last = performance.now();
+        let glow = null;
 
         const pointer = { x: -9999, y: -9999 };
         const GLOW = 240;
@@ -108,8 +112,16 @@
             canvas.width = Math.round(width * dpr);
             canvas.height = Math.round(height * dpr);
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            // 径向渐变每帧重建一次是纯浪费；以原点为圆心建一次，绘制时平移。
+            glow = ctx.createRadialGradient(0, 0, 0, 0, 0, GLOW);
+            glow.addColorStop(0, 'rgba(61, 58, 255, 0.14)');
+            glow.addColorStop(0.5, 'rgba(61, 58, 255, 0.05)');
+            glow.addColorStop(1, 'rgba(61, 58, 255, 0)');
+
             seed();
-            if (reduceMotion) {
+            // 静态模式与减少动效模式都只保留一帧；动画模式交给 loop。
+            if (!animate || reduceMotion) {
                 draw(performance.now());
             }
         }
@@ -180,40 +192,38 @@
                 ctx.restore();
             }
 
-            // 指针处的柔光
-            if (pointer.x > -1000) {
+            // 指针处的柔光（渐变在 resize 时已建好，这里只做平移）
+            if (pointer.x > -1000 && glow) {
                 ctx.save();
                 ctx.globalCompositeOperation = 'lighter';
-                const grad = ctx.createRadialGradient(pointer.x, pointer.y, 0, pointer.x, pointer.y, GLOW);
-                grad.addColorStop(0, 'rgba(61, 58, 255, 0.14)');
-                grad.addColorStop(0.5, 'rgba(61, 58, 255, 0.05)');
-                grad.addColorStop(1, 'rgba(61, 58, 255, 0)');
-                ctx.fillStyle = grad;
-                ctx.fillRect(pointer.x - GLOW, pointer.y - GLOW, GLOW * 2, GLOW * 2);
+                ctx.translate(pointer.x, pointer.y);
+                ctx.fillStyle = glow;
+                ctx.fillRect(-GLOW, -GLOW, GLOW * 2, GLOW * 2);
                 ctx.restore();
             }
         }
 
         function loop(now) {
             draw(now);
-            last = now;
             requestAnimationFrame(loop);
         }
 
-        window.addEventListener(
-            'pointermove',
-            (event) => {
-                const r = canvas.getBoundingClientRect();
-                pointer.x = event.clientX - r.left;
-                pointer.y = event.clientY - r.top;
-            },
-            { passive: true }
-        );
+        if (animate) {
+            // 画布 fixed inset:0，客户端坐标即画布坐标，没必要每次指针移动都量一遍矩形。
+            window.addEventListener(
+                'pointermove',
+                (event) => {
+                    pointer.x = event.clientX;
+                    pointer.y = event.clientY;
+                },
+                { passive: true }
+            );
 
-        window.addEventListener('pointerleave', () => {
-            pointer.x = -9999;
-            pointer.y = -9999;
-        });
+            window.addEventListener('pointerleave', () => {
+                pointer.x = -9999;
+                pointer.y = -9999;
+            });
+        }
 
         let resizeTimer = 0;
         window.addEventListener('resize', () => {
@@ -222,7 +232,7 @@
         });
 
         // 表单聚焦时，图标向码头聚拢
-        const dock = document.querySelector('[data-dock]');
+        const dock = animate ? document.querySelector('[data-dock]') : null;
         if (dock) {
             const focus = () => {
                 const r = dock.getBoundingClientRect();
@@ -240,7 +250,7 @@
         }
 
         resize();
-        if (!reduceMotion) {
+        if (animate && !reduceMotion) {
             requestAnimationFrame(loop);
         }
     }
@@ -248,6 +258,21 @@
     const canvas = document.querySelector('[data-field]');
     if (canvas) {
         startField(canvas);
+    }
+
+    /* ===================================================== 跳过导航 */
+
+    // href 指向 #content 只是无 JS 时的兜底；真正落在 <main> 上，
+    // 否则下一次 Tab 仍会先进入侧栏导航。
+    const skipLink = document.querySelector('.skip');
+    if (skipLink) {
+        skipLink.addEventListener('click', (event) => {
+            const main = document.querySelector('main') || document.querySelector('#content');
+            if (!main) return;
+            event.preventDefault();
+            main.setAttribute('tabindex', '-1');
+            main.focus();
+        });
     }
 
     /* ===================================================== 磁吸按钮 */

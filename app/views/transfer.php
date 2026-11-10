@@ -9,6 +9,9 @@ if (!defined('BASE_PATH')) {
 
 /** @var bool $enabled */
 /** @var bool $localOnly */
+/** @var int $ttlHours */
+/** @var int $maxBytes */
+/** @var int $maxFiles */
 $appName = (string) config('app_name');
 ?>
 <div class="tp" data-page="transfer">
@@ -23,7 +26,7 @@ $appName = (string) config('app_name');
     <main class="tp__main">
         <section class="tp__intro">
             <h1>两台电脑，<br>直接传文件。</h1>
-            <p>不用登录。创建一个房间，把链接或 6 位取件码给对方；双方都能上传和下载，24 小时后自动清空。</p>
+            <p>不用登录。创建一个房间，把链接或 6 位取件码给对方；双方都能上传和下载，<?= (int) $ttlHours ?> 小时后自动清空。</p>
             <?php if ($localOnly): ?>
                 <div class="mwarn">
                     <?= lucide('alert-triangle') ?>
@@ -44,6 +47,11 @@ $appName = (string) config('app_name');
                     <input class="minput" type="password" data-create-pass maxlength="32" autocomplete="new-password">
                 </label>
                 <button class="mbtn mbtn--primary" type="button" data-create<?= $enabled ? '' : ' disabled' ?>>创建房间</button>
+                <ul class="tp__specs" aria-label="房间规格">
+                    <li><b><?= (int) $ttlHours ?> 小时</b><span>有效时长</span></li>
+                    <li><b><?= e(format_bytes((float) $maxBytes)) ?></b><span>容量上限</span></li>
+                    <li><b><?= (int) $maxFiles ?> 个</b><span>文件上限</span></li>
+                </ul>
             </section>
 
             <section class="tp__card">

@@ -12,11 +12,12 @@ function tags_list(): void
     $userId = Auth::id();
     $user = Auth::user();
 
+    $private = Auth::privateUnlocked() ? '' : ' AND n.is_private = 0';
     $tags = q_all(
-        'SELECT t.*, COUNT(nt.node_id) AS use_count
+        'SELECT t.*, COUNT(n.id) AS use_count
          FROM tags t
          LEFT JOIN node_tags nt ON nt.tag_id = t.id
-         LEFT JOIN nodes n ON n.id = nt.node_id AND n.deleted_at IS NULL
+         LEFT JOIN nodes n ON n.id = nt.node_id AND n.deleted_at IS NULL' . $private . '
          WHERE t.user_id = ?
          GROUP BY t.id
          ORDER BY use_count DESC, t.name ASC',

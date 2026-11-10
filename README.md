@@ -132,7 +132,7 @@ Apache 下 `.htaccess` 已覆盖，确认 `AllowOverride` 没有关掉即可。
 
 ## 计划任务
 
-传输队列默认只在页面加载时分段推进。想让它在没人开页面时也继续跑（离线下载、推送到对象存储、清理过期分片等），加一条每分钟执行的任务：
+传输队列默认只在页面加载时分段推进。想让它在没人开页面时也继续跑（离线下载、推送到对象存储、清理过期分片/日志/会话等），加一条每分钟执行的任务：
 
 ```
 https://你的域名/index.php?r=tasks.cron&key=<config 里的 cron_key>
@@ -169,6 +169,20 @@ runuser -u www -- php tests/t1_schema.php
 for t in tests/t*.php; do runuser -u www -- php "$t" || echo "失败: $t"; done
 ```
 
+前端交互测试用 headless Chromium 驱动真实页面（站点需已在本机运行）：
+
+```bash
+# 以能访问 Chromium 的用户执行；测试用户/会话会自动创建并清理。
+# 可用 TEST_HTTP_PORT 指定站点端口，CHROME_BIN 指定浏览器路径。
+node tests/js/run.mjs
+```
+
+PHP 与前端测试可以一条命令跑完（PHP 部分会自动切换到 www 身份）：
+
+```bash
+tests/run-all.sh
+```
+
 ---
 
 ## 目录结构
@@ -176,6 +190,7 @@ for t in tests/t*.php; do runuser -u www -- php "$t" || echo "失败: $t"; done
 ```
 app/
   bootstrap.php      初始化：配置、错误处理、安全响应头
+  autoload.php       极简 PSR-4 自动加载（Shiyun\Lib\* → app/lib/）
   config.php         本地配置（含凭据，不入库）
   config.example.php 配置模板
   schema.php         表结构定义 + SCHEMA_VERSION（改结构就加一，下次请求自动迁移）
@@ -189,7 +204,7 @@ app/
 assets/
   css/ js/           样式与前端脚本，无构建步骤，改完刷新即可
 runtime/             运行时数据（用户文件、会话、分片、缩略图、日志）——不入库，禁止 Web 访问
-tests/               功能测试
+tests/               功能测试（PHP 脚本 + tests/js 前端交互）
 docs/                设计与实施文档
 ```
 
@@ -208,11 +223,22 @@ docs/                设计与实施文档
 - 上传内容按 SHA-256 寻址，原文件名不参与落盘路径，避免路径穿越
 - 私密空间锁定后，列表、搜索、下载、预览、API、WebDAV 全部拒绝
 - 对外分享可设提取码与有效期
+- 默认输出 `X-Robots-Tag: noindex` 与 `robots.txt`，公开分享链接不会被搜索引擎收录
 
 需要你自己把关的：
 
 - **`app/config.php` 不要提交到版本库**（`.gitignore` 已排除，但别手动加进去）
 - **`runtime/` 必须禁止 Web 访问**，见上面「Web 服务器」
+- **`tests/` 与非公开文档目录也要禁止 Web 访问**。测试脚本会创建/删除数据；
+  `tests/lib.php` 已加 CLI 守卫，但 Nginx 下仍建议显式拦截：
+
+  ```nginx
+  location ^~ /tests/          { deny all; return 404; }
+  location ^~ /docs/review/    { deny all; return 404; }
+  location ^~ /.superpowers/   { deny all; return 404; }
+  location ^~ /.trae/          { deny all; return 404; }
+  ```
+
 - 生产环境请走 HTTPS
 - 公网部署前确认 `allow_registration` 是 `false`、`reset_link_in_response` 是 `false`
 

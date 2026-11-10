@@ -111,11 +111,17 @@ function unique_username(string $base): string
 
 function user_settings(int $userId): array
 {
+    // 一次请求里会被多处读取；写入后由 save_user_settings() 失效缓存。
+    if (isset($GLOBALS['__user_settings_cache'][$userId])) {
+        return $GLOBALS['__user_settings_cache'][$userId];
+    }
+
     $row = q_one('SELECT * FROM user_settings WHERE user_id = ?', [$userId]);
     if ($row === null) {
         q_insert('user_settings', ['user_id' => $userId, 'trash_retention_days' => (int) config('trash_retention')]);
         $row = q_one('SELECT * FROM user_settings WHERE user_id = ?', [$userId]) ?? [];
     }
+    $GLOBALS['__user_settings_cache'][$userId] = $row;
     return $row;
 }
 
@@ -131,23 +137,29 @@ function save_user_settings(int $userId, array $patch): void
         return;
     }
     q_update('user_settings', $patch, 'user_id = ?', [$userId]);
+    unset($GLOBALS['__user_settings_cache'][$userId]);
 }
 
 /* ------------------------------------------------------------- 空间根目录 */
 
+/* 三个空间根在一次请求里会被多处调用（面包屑、统计、分页……），
+   主键查询本身不大，但没必要反复打库；请求内缓存即可。 */
 function user_root_id(int $userId): int
 {
-    return (int) q_val('SELECT root_id FROM users WHERE id = ?', [$userId]);
+    static $cache = [];
+    return $cache[$userId] ??= (int) q_val('SELECT root_id FROM users WHERE id = ?', [$userId]);
 }
 
 function user_trash_id(int $userId): int
 {
-    return (int) q_val('SELECT trash_root_id FROM users WHERE id = ?', [$userId]);
+    static $cache = [];
+    return $cache[$userId] ??= (int) q_val('SELECT trash_root_id FROM users WHERE id = ?', [$userId]);
 }
 
 function user_private_id(int $userId): int
 {
-    return (int) q_val('SELECT private_root_id FROM users WHERE id = ?', [$userId]);
+    static $cache = [];
+    return $cache[$userId] ??= (int) q_val('SELECT private_root_id FROM users WHERE id = ?', [$userId]);
 }
 
 /* ------------------------------------------------------------- 容量统计 */

@@ -83,7 +83,7 @@ $entryLabel = $loggedIn ? '进入网盘'
                 <span class="ln ln--2" aria-hidden="true"><?= $chars($headline[1]) ?></span>
             </h1>
 
-            <p class="lede">一块属于你自己的云端空间。上传、整理、预览、分享、挂载——一台自己的服务器，一套 PHP 跑完，文件始终在你手里。</p>
+            <p class="lede">一块属于你自己的云端空间。<br>上传、整理、预览、分享、挂载——<br>一台自己的服务器，一套 PHP 跑完，文件始终在你手里。</p>
 
             <div class="hero__act">
                 <a class="cta" data-magnetic href="<?= e($entryRoute) ?>">

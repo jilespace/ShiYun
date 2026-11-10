@@ -31,6 +31,10 @@ function search_index_node(int $userId, array $node): void
     if ($node['kind'] !== 'file' || $node['blob_id'] === null) {
         return;
     }
+    // 私密空间内容不进入全文索引，避免正文留在 file_index 里
+    if ((int) ($node['is_private'] ?? 0) === 1) {
+        return;
+    }
 
     $ext = (string) ($node['ext'] ?? '');
     $mime = (string) ($node['mime'] ?? '');
@@ -320,7 +324,7 @@ function search_facets(int $userId): array
             SUM(mime LIKE ?) AS images,
             SUM(mime LIKE ?) AS videos,
             SUM(mime LIKE ?) AS audios
-         FROM nodes WHERE user_id = ? AND deleted_at IS NULL',
+         FROM nodes WHERE user_id = ? AND deleted_at IS NULL AND is_private = 0',
         ['folder', 'file', 'image/%', 'video/%', 'audio/%', $userId]
     );
 
@@ -337,7 +341,7 @@ function search_facets(int $userId): array
 function search_rebuild(int $userId, int $limit = 500): array
 {
     $rows = q_all(
-        'SELECT * FROM nodes WHERE user_id = ? AND kind = ? AND deleted_at IS NULL
+        'SELECT * FROM nodes WHERE user_id = ? AND kind = ? AND deleted_at IS NULL AND is_private = 0
          ORDER BY updated_at DESC LIMIT ' . max(1, min(5000, $limit)),
         [$userId, 'file']
     );

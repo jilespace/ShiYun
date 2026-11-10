@@ -1,1 +1,5 @@
- 
+# 非公开目录：测试脚本会建/删数据，评审报告与本地工具目录不应被下载。
+# Apache 由本文件生效；Nginx 不读 .htaccess，需在 server 配置里加等价的 location。
+<IfModule mod_alias.c>
+    RedirectMatch 404 ^/(?:tests|\.superpowers|\.trae|docs/review)(?:/|$)
+</IfModule>

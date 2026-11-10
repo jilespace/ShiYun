@@ -23,11 +23,17 @@ function stats_show(): void
     $traffic = traffic_series($userId, $days);
     $dist = type_distribution($userId);
 
+    $private = Auth::privateUnlocked() ? '' : ' AND is_private = 0';
+    $privateJoin = Auth::privateUnlocked() ? '' : ' AND n.is_private = 0';
     $totals = [
-        'files'   => (int) q_val('SELECT COUNT(*) FROM nodes WHERE user_id = ? AND kind = ? AND deleted_at IS NULL', [$userId, 'file']),
-        'folders' => (int) q_val('SELECT COUNT(*) FROM nodes WHERE user_id = ? AND kind = ? AND deleted_at IS NULL', [$userId, 'folder']),
-        'trash'   => (int) q_val('SELECT COUNT(*) FROM nodes WHERE user_id = ? AND deleted_at IS NOT NULL', [$userId]),
-        'shared'  => (int) q_val("SELECT COUNT(*) FROM shares WHERE user_id = ? AND status = 'active'", [$userId]),
+        'files'   => (int) q_val('SELECT COUNT(*) FROM nodes WHERE user_id = ? AND kind = ? AND deleted_at IS NULL' . $private, [$userId, 'file']),
+        'folders' => (int) q_val('SELECT COUNT(*) FROM nodes WHERE user_id = ? AND kind = ? AND deleted_at IS NULL' . $private, [$userId, 'folder']),
+        'trash'   => (int) q_val('SELECT COUNT(*) FROM nodes WHERE user_id = ? AND deleted_at IS NOT NULL' . $private, [$userId]),
+        'shared'  => (int) q_val(
+            "SELECT COUNT(*) FROM shares s JOIN nodes n ON n.id = s.node_id
+             WHERE s.user_id = ? AND s.status = 'active'" . $privateJoin,
+            [$userId]
+        ),
     ];
 
     $sumUp = array_sum(array_map(static fn (array $r): int => $r['up'], $traffic));

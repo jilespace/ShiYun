@@ -380,9 +380,9 @@ foreach ($children as $c) {
 }
 check($badgeCount === 1, '只有 active 的直链计入角标（revoked 不算）');
 
-$js = (string) file_get_contents(BASE_PATH . '/assets/js/files.js');
-check(str_contains($js, 'directCount'), 'files.js 应读取 directCount');
-check(str_contains($js, "icon('zap'"), 'files.js 应用 zap 图标做直链角标');
+$view = (string) file_get_contents(BASE_PATH . '/app/lib/NodeView.php');
+check(str_contains($view, 'directCount'), 'NodeView 应读取 directCount');
+check(str_contains($view, "lucide('zap'"), 'NodeView 应用 zap 图标做直链角标');
 
 // --------------------------------------------------------- 分享页直链标签
 

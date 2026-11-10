@@ -27,6 +27,9 @@ function transfer_index(): void
         'scripts'   => ['/assets/js/icons.js', '/assets/js/shell.js', '/assets/js/transfer.js'],
         'enabled'   => transfer_enabled(),
         'localOnly' => transfer_is_local_host(),
+        'ttlHours'  => transfer_ttl_hours(),
+        'maxBytes'  => transfer_max_bytes(),
+        'maxFiles'  => transfer_max_files(),
     ]);
 }
 

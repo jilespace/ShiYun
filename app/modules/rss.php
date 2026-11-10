@@ -107,8 +107,9 @@ function rss_authenticate(string $token): ?array
 /** @return list<array{title:string,link:string,guid:string,ts:int,description:string}> */
 function rss_file_items(int $userId, int $limit, string $site, string $token): array
 {
+    // RSS 令牌是公开可转发的凭据，绝不应成为绕过私密空间的入口
     $rows = q_all(
-        'SELECT * FROM nodes WHERE user_id = ? AND kind = ? AND deleted_at IS NULL
+        'SELECT * FROM nodes WHERE user_id = ? AND kind = ? AND deleted_at IS NULL AND is_private = 0
          ORDER BY updated_at DESC LIMIT ' . $limit,
         [$userId, 'file']
     );

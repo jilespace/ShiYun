@@ -2,6 +2,12 @@
 
 declare(strict_types=1);
 
+// 只允许 CLI 与 `php -S`（cli-server）；公网 FPM 直接访问一律 404。
+if (!in_array(PHP_SAPI, ['cli', 'cli-server'], true)) {
+    http_response_code(404);
+    exit;
+}
+
 /* =========================================================================
    本地 S3 存根，供 t16_bucket.php 用 `php -S` 拉起。
    只回放协议层面的形状（寻址 / 请求行 / 查询串 / 响应体），不校验签名——

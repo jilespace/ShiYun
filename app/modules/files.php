@@ -40,14 +40,18 @@ function files_list(): void
     // 三个分区共用同一套渲染路径，只是数据源不同
     if ($section === 'trash') {
         $folder = node_require($userId, user_trash_id($userId));
-        $children = array_map('node_public', node_trash_list($userId));
         $crumbs = [['id' => (int) $folder['id'], 'name' => '回收站']];
         $retention = (int) user_setting($userId, 'trash_retention_days', 30);
-        // 仅在进入回收站时按上限分批清理，避免每次浏览目录都触发大量删除
+        // 先清理过期条目，再分页取数：否则首页可能包含刚被清掉的项
         trash_purge_expired($userId, $retention, 200);
+        [$page, $hasMore] = node_trash_page($userId, FILE_PAGE_SIZE, 0);
+        $children = array_map('node_public', $page);
+        $nextOffset = count($children);
     } elseif ($section === 'favorites') {
         $folder = node_require($userId, user_root_id($userId));
-        $children = array_map('node_public', node_favorites($userId));
+        [$page, $hasMore] = node_favorites_page($userId, FILE_PAGE_SIZE, 0);
+        $children = array_map('node_public', $page);
+        $nextOffset = count($children);
         $crumbs = [['id' => (int) $folder['id'], 'name' => '收藏']];
         $retention = 0;
     } else {
@@ -71,13 +75,16 @@ function files_list(): void
     }
 
     // 页脚数字取自整体统计，不能拿当前页去加总——否则翻页时数字会变
-    $childStats = $section === 'files'
-        ? node_child_stats($userId, (int) $folder['id'], (bool) ($settings['show_hidden'] ?? false))
-        : [
+    $childStats = match ($section) {
+        'files'     => node_child_stats($userId, (int) $folder['id'], (bool) ($settings['show_hidden'] ?? false)),
+        'trash'     => node_trash_stats($userId),
+        'favorites' => node_favorites_stats($userId),
+        default     => [
             'folders' => count(array_filter($children, static fn (array $c): bool => $c['kind'] === 'folder')),
             'files'   => count(array_filter($children, static fn (array $c): bool => $c['kind'] === 'file')),
             'bytes'   => array_sum(array_map(static fn (array $c): int => $c['kind'] === 'file' ? (int) $c['size'] : 0, $children)),
-        ];
+        ],
+    };
 
     $tags = q_all('SELECT * FROM tags WHERE user_id = ? ORDER BY name ASC', [$userId]);
 
@@ -346,28 +353,65 @@ function files_data(): void
         'type'       => (string) input('type', 'all'),
     ];
 
+    // 前端按当前视图取片段；服务端是行/卡片标记的唯一来源。
+    // 只有显式传了 view 才生成 HTML——兼容旧调用方时不白算一遍。
+    $viewParam = input('view');
+    $view = $viewParam === 'grid' ? 'grid' : 'list';
+    $htmlFields = static function (array $children, int $start, bool $isTrash) use ($view, $viewParam): array {
+        if ($viewParam === null) {
+            return [];
+        }
+        return [
+            'html' => \Shiyun\Lib\NodeView::fragment($children, $view, $start, $isTrash),
+            'view' => $view,
+        ];
+    };
+
     if ($section === 'trash') {
         $folder = node_require($userId, user_trash_id($userId));
-        $items = node_trash_list($userId);
+
+        $hasMore = false;
+        $start = 0;
+        if (input('offset') !== null) {
+            $start = max(0, input_int('offset'));
+            $limit = max(1, min(FILE_PAGE_SIZE * 4, input_int('limit', FILE_PAGE_SIZE)));
+            [$items, $hasMore] = node_trash_page($userId, $limit, $start);
+        } else {
+            $items = node_trash_list($userId);
+        }
+        $children = array_map('node_public', $items);
+
         json_ok([
             'folder'   => node_public($folder),
             'crumbs'   => [['id' => (int) $folder['id'], 'name' => '回收站']],
-            'children' => array_map('node_public', $items),
-            'stats'    => [
-                'files'   => count(array_filter($items, static fn (array $n): bool => $n['kind'] === 'file')),
-                'folders' => count(array_filter($items, static fn (array $n): bool => $n['kind'] === 'folder')),
-                'bytes'   => array_sum(array_map(static fn (array $n): int => (int) $n['size'], $items)),
-            ],
+            'children' => $children,
+            ...$htmlFields($children, $start, true),
+            'hasMore'  => $hasMore,
+            'stats'    => node_trash_stats($userId),
         ]);
     }
 
     if ($section === 'favorites') {
         $folder = node_require($userId, user_root_id($userId));
+
+        $hasMore = false;
+        $start = 0;
+        if (input('offset') !== null) {
+            $start = max(0, input_int('offset'));
+            $limit = max(1, min(FILE_PAGE_SIZE * 4, input_int('limit', FILE_PAGE_SIZE)));
+            [$items, $hasMore] = node_favorites_page($userId, $limit, $start);
+        } else {
+            $items = node_favorites($userId);
+        }
+        $children = array_map('node_public', $items);
+
         json_ok([
             'folder'   => node_public($folder),
             'crumbs'   => [['id' => (int) $folder['id'], 'name' => '收藏']],
-            'children' => array_map('node_public', node_favorites($userId)),
-            'stats'    => ['files' => 0, 'bytes' => 0, 'folders' => 0],
+            'children' => $children,
+            ...$htmlFields($children, $start, false),
+            'hasMore'  => $hasMore,
+            'stats'    => node_favorites_stats($userId),
         ]);
     }
 
@@ -381,8 +425,10 @@ function files_data(): void
     // 传了 offset 就按页续取（前端的「加载更多」）；
     // 不传则维持「一次给全」——页面上的常规刷新依赖这个行为。
     $hasMore = false;
+    $start = 0;
     if (input('offset') !== null) {
         $offset = max(0, input_int('offset'));
+        $start = $offset;
         $limit = max(1, min(FILE_PAGE_SIZE * 4, input_int('limit', FILE_PAGE_SIZE)));
         [$page, $hasMore] = node_children_page($userId, $folderId, $opts, $limit, $offset);
         $children = array_map('node_public', $page);
@@ -394,6 +440,7 @@ function files_data(): void
         'folder'   => node_public($folder),
         'crumbs'   => node_breadcrumb($userId, $folderId),
         'children' => $children,
+        ...$htmlFields($children, $start, false),
         'hasMore'  => $hasMore,
         'stats'    => node_subtree_stats($userId, $folder),
     ]);

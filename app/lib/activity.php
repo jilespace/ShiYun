@@ -26,15 +26,25 @@ function activity_list(int $userId, int $limit = 50, int $offset = 0, ?string $a
     $limit = max(1, min(200, $limit));
     $offset = max(0, $offset);
 
+    // 私密空间锁定后，日志里的文件名也不能出现；LEFT JOIN 保留无节点动作
+    // （登录、改密等）与已删除节点，只拦截仍然存在的私密节点。
+    $private = Auth::privateUnlocked()
+        ? ''
+        : ' AND (a.node_id IS NULL OR n.id IS NULL OR n.is_private = 0)';
+
     if ($action !== null && $action !== '') {
         return q_all(
-            'SELECT * FROM activities WHERE user_id = ? AND action = ? ORDER BY id DESC LIMIT ' . $limit . ' OFFSET ' . $offset,
+            'SELECT a.* FROM activities a LEFT JOIN nodes n ON n.id = a.node_id
+             WHERE a.user_id = ? AND a.action = ?' . $private . '
+             ORDER BY a.id DESC LIMIT ' . $limit . ' OFFSET ' . $offset,
             [$userId, $action]
         );
     }
 
     return q_all(
-        'SELECT * FROM activities WHERE user_id = ? ORDER BY id DESC LIMIT ' . $limit . ' OFFSET ' . $offset,
+        'SELECT a.* FROM activities a LEFT JOIN nodes n ON n.id = a.node_id
+         WHERE a.user_id = ?' . $private . '
+         ORDER BY a.id DESC LIMIT ' . $limit . ' OFFSET ' . $offset,
         [$userId]
     );
 }
