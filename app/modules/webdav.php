@@ -183,7 +183,11 @@ function webdav_path(): string
     if (str_starts_with($raw, 'webdav.handle')) {
         $sub = substr($raw, strlen('webdav.handle'));
     }
-    if ($sub === '' && !empty($_SERVER['PATH_INFO'])) {
+    // 客户端把子路径放在 PATH_INFO、查询串只留入口名时，r 可能只是
+    // "webdav.handle" 或 "webdav.handle/"。后者裁剪后同样视为空，
+    // 否则集合请求（常带尾斜杠）会全部落到根目录：MKCOL 返回 405，
+    // 目录建不出来，随后的 PUT 就以 409 失败。
+    if (trim($sub, '/') === '' && !empty($_SERVER['PATH_INFO'])) {
         $sub = (string) $_SERVER['PATH_INFO'];
     }
 
